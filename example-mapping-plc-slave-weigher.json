@@ -1,0 +1,250 @@
+{
+  "_notes": [
+    "Scenario: PLC + SLAVE + WEIGHER — all three modes active at once.",
+    "machine_id is derived from the first device_type='master': {location}/{name} = area2/machine_c.",
+    "The slave (chiller) is polled via Modbus RTU, sharing the RS-485 port, each with a different unit_id.",
+    "The weigher is read via serial ASCII on a separate port — no Modbus polling.",
+    "bridge: automatically syncs the chiller outlet temperature → PLC setpoint (no operator).",
+    "parser.raw_topic: publish all capture groups as JSON to {base}/{location}/{name}/raw.",
+    "  Payload: {\"weight\":12.5,\"unit\":\"kg\"}.",
+    "commands: optional — serial commands triggered from MQTT directly to the scale.",
+    "  Topic: {base}/{location}/{name}/cmd/{key} → edge-client writes to the serial port."
+  ],
+  "base_topic": "acme/site",
+  "poll_interval_ms": 1000,
+  "devices": [
+    {
+      "_comment": "Main PLC — Modbus TCP, sets machine_id = area2/machine_c.",
+      "device_type": "master",
+      "device_id": "plc1",
+      "location": "area2",
+      "name": "machine_c",
+      "connection": {
+        "type": "tcp",
+        "host": "192.168.10.10",
+        "port": 502,
+        "unit_id": 1
+      },
+      "monitoring": [
+        {
+          "key": "temp_tank",
+          "label": "Tank Temperature",
+          "topic": "temp/tank",
+          "type": "float",
+          "unit": "C",
+          "modbus": {
+            "kind": "read_holding_registers",
+            "address": 0,
+            "byte_order": "big_little"
+          }
+        },
+        {
+          "key": "current_motor",
+          "label": "Motor Current",
+          "topic": "current/motor",
+          "type": "float",
+          "unit": "A",
+          "modbus": {
+            "kind": "read_holding_registers",
+            "address": 2,
+            "byte_order": "big_little"
+          }
+        }
+      ],
+      "set": [
+        {
+          "key": "set_temp_tank",
+          "label": "Tank Temp Setpoint",
+          "topic": "set/temp/tank",
+          "type": "float",
+          "unit": "C",
+          "modbus": {
+            "kind": "write_multiple_registers",
+            "address": 26
+          }
+        }
+      ],
+      "control": [
+        {
+          "key": "control_motor",
+          "label": "Motor On/Off",
+          "topic": "control/motor",
+          "type": "boolean",
+          "modbus": {
+            "kind": "write_single_register",
+            "address": 6,
+            "on_value": 1,
+            "off_value": 3
+          }
+        }
+      ]
+    },
+    {
+      "_comment": "Chiller slave — Modbus RTU via RS-485 (shares /dev/ttyUSB0), unit_id=8.",
+      "device_type": "slave",
+      "device_id": "slave1",
+      "location": "area2",
+      "name": "chiller",
+      "connection": {
+        "type": "rtu_serial",
+        "unit_id": 8,
+        "path": "/dev/ttyUSB0",
+        "baud": 19200,
+        "parity": "none",
+        "stop_bits": 1,
+        "data_bits": 8
+      },
+      "monitoring": [
+        {
+          "key": "temp_out_chiller",
+          "label": "Chiller Outlet Temperature",
+          "topic": "temp/out",
+          "type": "integer",
+          "unit": "C",
+          "modbus": {
+            "kind": "read_input_registers",
+            "address": 1000,
+            "scale": 0.1
+          }
+        }
+      ],
+      "set": [
+        {
+          "key": "set_temp_chiller",
+          "label": "Chiller Temp Setpoint",
+          "topic": "set/temp",
+          "type": "float",
+          "unit": "C",
+          "modbus": {
+            "kind": "write_multiple_registers",
+            "address": 20
+          }
+        }
+      ],
+      "control": [
+        {
+          "key": "control_chiller_on",
+          "label": "Chiller On/Off",
+          "topic": "control/on",
+          "type": "boolean",
+          "modbus": {
+            "kind": "write_single_register",
+            "address": 30,
+            "on_value": 1,
+            "off_value": 3
+          }
+        }
+      ]
+    },
+    {
+      "_comment": "GSC scale — serial ASCII on a separate port, no Modbus.",
+      "device_type": "weigher",
+      "device_id": "weigher_gsc",
+      "location": "area2",
+      "name": "scale_gsc",
+      "connection": {
+        "type": "serial_ascii",
+        "path": "/dev/ttyUSB1",
+        "baud": 9600,
+        "parity": "none",
+        "stop_bits": 1,
+        "data_bits": 7
+      },
+      "parser": {
+        "regex": "[A-Za-z-]*(?P<weight>[-+]?[0-9]+\\.[0-9]+)(?P<unit>[A-Za-z]*)",
+        "byte_map": [
+          {
+            "from": 176,
+            "to": 48
+          },
+          {
+            "from": 177,
+            "to": 49
+          },
+          {
+            "from": 178,
+            "to": 50
+          },
+          {
+            "from": 179,
+            "to": 51
+          },
+          {
+            "from": 180,
+            "to": 52
+          },
+          {
+            "from": 181,
+            "to": 53
+          },
+          {
+            "from": 182,
+            "to": 54
+          },
+          {
+            "from": 183,
+            "to": 55
+          },
+          {
+            "from": 184,
+            "to": 56
+          },
+          {
+            "from": 185,
+            "to": 57
+          }
+        ],
+        "raw_topic": "raw"
+      },
+      "monitoring": [
+        {
+          "key": "weight",
+          "label": "GSC Weight",
+          "topic": "weight/raw",
+          "type": "float",
+          "unit": "kg"
+        },
+        {
+          "key": "unit",
+          "label": "GSC Unit",
+          "topic": "unit/raw",
+          "type": "string"
+        }
+      ],
+      "set": [],
+      "control": [],
+      "commands": [
+        {
+          "key": "tare",
+          "serial_cmd": "T\\r\\n"
+        },
+        {
+          "key": "zero",
+          "serial_cmd": "Z\\r\\n"
+        },
+        {
+          "key": "print",
+          "serial_cmd": "P\\r\\n"
+        }
+      ]
+    }
+  ],
+  "_bridge_notes": [
+    "Bridge: read the chiller outlet temperature → write it to the PLC tank setpoint.",
+    "Runs every poll_interval_ms, bypasses the control gate, needs no operator.",
+    "The PLC always wins — the bridge re-asserts it every cycle."
+  ],
+  "bridge": [
+    {
+      "read_from": {
+        "device": "slave1",
+        "key": "temp_out_chiller"
+      },
+      "write_to": {
+        "device": "plc1",
+        "key": "set_temp_tank"
+      },
+      "transform": "passthrough"
+    }
+  ]
+}

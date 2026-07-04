@@ -1,0 +1,67 @@
+{
+  "_notes": [
+    "Scenario: PLC-ONLY — one TCP PLC, no slaves or weighers.",
+    "machine_id is derived from the first device_type='master': {location}/{name} = area3/machine_c.",
+    "No 'slave' or 'weigher' entries are needed at all."
+  ],
+  "base_topic": "acme/site",
+  "poll_interval_ms": 1000,
+  "devices": [
+    {
+      "device_type": "master",
+      "device_id": "plc1",
+      "location": "area3",
+      "name": "machine_c",
+      "connection": {
+        "type": "tcp",
+        "host": "192.168.10.10",
+        "port": 502,
+        "unit_id": 1
+      },
+      "monitoring": [
+        {
+          "key": "temp_tank",
+          "label": "Tank Temperature",
+          "topic": "temp/tank",
+          "type": "float",
+          "unit": "C",
+          "modbus": { "kind": "read_holding_registers", "address": 0, "byte_order": "big_little" }
+        },
+        {
+          "key": "current_motor",
+          "label": "Motor Current",
+          "topic": "current/motor",
+          "type": "float",
+          "unit": "A",
+          "modbus": { "kind": "read_holding_registers", "address": 2, "byte_order": "big_little" }
+        }
+      ],
+      "set": [
+        {
+          "key": "set_temp_tank",
+          "label": "Tank Temp Setpoint",
+          "topic": "set/temp/tank",
+          "type": "float",
+          "unit": "C",
+          "modbus": { "kind": "write_multiple_registers", "address": 26 }
+        }
+      ],
+      "control": [
+        {
+          "key": "control_motor",
+          "label": "Motor On/Off",
+          "topic": "control/motor",
+          "type": "boolean",
+          "modbus": {
+            "kind": "write_single_register",
+            "address": 6,
+            "on_value": 1,
+            "off_value": 3
+          }
+        }
+      ]
+    }
+  ],
+
+  "bridge": []
+}

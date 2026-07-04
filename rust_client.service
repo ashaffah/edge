@@ -1,0 +1,15 @@
+[Unit]
+Description=Rust Edge Client Application
+After=network.target
+
+[Service]
+Type=exec
+EnvironmentFile=/home/pi/rust-client/.env
+WorkingDirectory=/home/pi/rust-client
+ExecStart=/home/pi/rust-client/edge-client
+Restart=always
+User=pi
+Group=pi
+
+[Install]
+WantedBy=multi-user.target

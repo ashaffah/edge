@@ -1,0 +1,183 @@
+{
+  "_notes": [
+    "base_topic: prefix for all MQTT topics. Example: acme/site/area2/machine_c/temp/tank",
+    "poll_interval_ms: how often PLC data is read (ms). Default: 1000 = 1 second.",
+    "devices: list of all devices.",
+    "  - device_type 'master': Modbus master PLC.",
+    "    * FIRST master = primary PLC — polled via the main bulk read loop.",
+    "    * SUBSEQUENT masters = additional PLCs — polled as independent source sessions.",
+    "    * Use multi-PLC for: (a) split read/write ports (Siemens, etc.) or",
+    "      (b) several master PLCs on the same network.",
+    "  - device_type 'slave': Modbus slave device (sensor, chiller, etc.).",
+    "connection.type: 'tcp' for an Ethernet PLC, 'rtu_serial' for RS-485/serial.",
+    "monitoring: data that is read and published to the dashboard.",
+    "set: setpoints that can be changed from the dashboard.",
+    "control: on/off actuators controlled by the operator (needs gate permission).",
+    "bridge: automatic sync between devices (not via an operator).",
+    "Split-port example: plc1 port 502 = monitoring, plc2 port 503 = set+control.",
+    "Multi-master example: plc1 = area2, plc2 = area3 (different IP/port, different unit_id)."
+  ],
+  "base_topic": "acme/site",
+  "poll_interval_ms": 1000,
+  "devices": [
+    {
+      "device_type": "master",
+      "device_id": "plc1",
+      "location": "area2",
+      "name": "machine_c",
+      "connection": {
+        "type": "tcp",
+        "host": "192.168.10.10",
+        "port": 502,
+        "unit_id": 1
+      },
+      "monitoring": [
+        {
+          "key": "temp_tank",
+          "label": "Tank Temperature",
+          "topic": "temp/tank",
+          "type": "float",
+          "unit": "C",
+          "modbus": {
+            "kind": "read_holding_registers",
+            "address": 0,
+            "scale": 1.0,
+            "byte_order": "little_big"
+          }
+        }
+      ],
+      "set": [
+        {
+          "key": "set_temp_tank",
+          "label": "Tank Temp Setpoint",
+          "topic": "set/temp",
+          "type": "float",
+          "unit": "C",
+          "modbus": { "kind": "write_multiple_registers", "address": 10 }
+        }
+      ],
+      "control": []
+    },
+    {
+      "device_type": "slave",
+      "device_id": "slave1",
+      "location": "area2",
+      "name": "chiller",
+      "connection": {
+        "type": "rtu_serial",
+        "unit_id": 8,
+        "path": "/dev/ttyUSB0",
+        "baud": 19200,
+        "parity": "none",
+        "stop_bits": 1,
+        "data_bits": 8
+      },
+      "monitoring": [
+        {
+          "key": "temp_out_chiller",
+          "label": "Chiller Outlet Temperature",
+          "topic": "temp/out",
+          "type": "float",
+          "unit": "C",
+          "modbus": { "kind": "read_input_registers", "address": 1000, "scale": 0.1 }
+        }
+      ],
+      "set": [
+        {
+          "key": "set_temp_chiller",
+          "label": "Chiller Temp Setpoint",
+          "topic": "set/temp",
+          "type": "float",
+          "unit": "C",
+          "modbus": { "kind": "write_multiple_registers", "address": 20 }
+        }
+      ],
+      "control": [
+        {
+          "key": "control_chiller_on",
+          "label": "Chiller On/Off",
+          "topic": "control/on",
+          "type": "boolean",
+          "modbus": {
+            "kind": "write_single_register",
+            "address": 30,
+            "on_value": 1,
+            "off_value": 3
+          }
+        }
+      ]
+    },
+    {
+      "device_type": "slave",
+      "device_id": "slave2",
+      "location": "area2",
+      "name": "sensor_panel",
+      "connection": {
+        "type": "rtu_serial",
+        "unit_id": 5,
+        "path": "/dev/ttyUSB0",
+        "baud": 19200,
+        "parity": "none",
+        "stop_bits": 1,
+        "data_bits": 8
+      },
+      "monitoring": [
+        {
+          "key": "door_open",
+          "label": "Panel Door Sensor",
+          "topic": "sensor/door",
+          "type": "boolean",
+          "modbus": { "kind": "read_discrete_inputs", "address": 3 }
+        },
+        {
+          "key": "pressure_line",
+          "label": "Line Pressure",
+          "topic": "sensor/pressure",
+          "type": "float",
+          "unit": "bar",
+          "modbus": { "kind": "read_input_registers", "address": 200 }
+        }
+      ],
+      "set": [],
+      "control": []
+    },
+    {
+      "device_type": "master",
+      "device_id": "plc2",
+      "location": "area3",
+      "name": "machine_c",
+      "connection": {
+        "type": "tcp",
+        "host": "192.168.10.11",
+        "port": 502,
+        "unit_id": 2
+      },
+      "monitoring": [
+        {
+          "key": "temp_tank",
+          "label": "Tank Temperature",
+          "topic": "temp/tank",
+          "type": "float",
+          "unit": "C",
+          "modbus": { "kind": "read_holding_registers", "address": 0 }
+        }
+      ],
+      "set": [],
+      "control": []
+    }
+  ],
+
+  "_bridge_notes": [
+    "Bridge task: read a source → write a PLC (or vice versa). Bypasses control_gate (automated write, not an operator).",
+    "Override semantics: the PLC always wins — the bridge continuously re-asserts every poll_interval. After the bridge write, the value is published to MQTT so the dashboard stays in sync.",
+    "transform: 'passthrough' = copy the raw value. Future: 'linear' (offset+scale), 'inverse', etc.",
+    "Validated at startup: the device_id + key in read_from + write_to must exist in devices."
+  ],
+  "bridge": [
+    {
+      "read_from": { "device": "slave1", "key": "temp_out_chiller" },
+      "write_to": { "device": "plc1", "key": "set_temp_tank" },
+      "transform": "passthrough"
+    }
+  ]
+}

@@ -1,0 +1,209 @@
+{
+  "_notes": [
+    "Scenario: WEIGHER-ONLY — serial-ASCII scales only, no PLC / Modbus.",
+    "device_type='weigher' + connection.type='serial_ascii' = no Modbus polling.",
+    "machine_id is derived from the first weigher: {location}/{name} = area1/scale.",
+    "parser.regex: named capture groups (?P<name>...) — the group name must match a key in monitoring.",
+    "parser.byte_map: byte-level substitution BEFORE ASCII decode.",
+    "  GSC: bytes 0xB0-0xB9 (176-185) represent digits 0-9 in the GSC encoding.",
+    "  Fujitsu: standard ASCII, empty byte_map.",
+    "A new brand = add a new weigher entry — no binary rebuild needed.",
+    "parser.raw_topic: optional — if set, publish all capture groups as JSON to this topic.",
+    "  Example: \"raw_topic\": \"raw\" → publish to {base}/{location}/{name}/raw with payload {\"weight\":12.5,\"unit\":\"kg\"}",
+    "commands: optional — list of serial commands that can be triggered from MQTT.",
+    "  The operator publishes to {base}/{location}/{name}/cmd/{key} (payload ignored).",
+    "  Edge-client writes serial_cmd to the scale's serial port.",
+    "  Escape sequences supported: \\r \\n \\t \\xNN.",
+    "  Note: the command string differs per brand — check the scale manual."
+  ],
+  "base_topic": "acme/site",
+  "devices": [
+    {
+      "_comment": "GSC scale — non-standard digit encoding (0xB0–0xB9 = '0'–'9').",
+      "device_type": "weigher",
+      "device_id": "weigher_gsc",
+      "location": "area1",
+      "name": "scale_gsc",
+      "connection": {
+        "type": "serial_ascii",
+        "path": "COM9",
+        "baud": 9600,
+        "parity": "none",
+        "stop_bits": 1,
+        "data_bits": 7
+      },
+      "parser": {
+        "regex": "[A-Za-z-]*(?P<weight>[-+]?[0-9]+\\.[0-9]+)(?P<unit>[A-Za-z]*)",
+        "byte_map": [
+          {
+            "from": 176,
+            "to": 48
+          },
+          {
+            "from": 177,
+            "to": 49
+          },
+          {
+            "from": 178,
+            "to": 50
+          },
+          {
+            "from": 179,
+            "to": 51
+          },
+          {
+            "from": 180,
+            "to": 52
+          },
+          {
+            "from": 181,
+            "to": 53
+          },
+          {
+            "from": 182,
+            "to": 54
+          },
+          {
+            "from": 183,
+            "to": 55
+          },
+          {
+            "from": 184,
+            "to": 56
+          },
+          {
+            "from": 185,
+            "to": 57
+          }
+        ],
+        "raw_topic": "raw"
+      },
+      "monitoring": [
+        {
+          "key": "weight",
+          "label": "GSC Weight",
+          "topic": "weight/raw",
+          "type": "float",
+          "unit": "kg"
+        },
+        {
+          "key": "unit",
+          "label": "GSC Unit",
+          "topic": "unit/raw",
+          "type": "string"
+        }
+      ],
+      "set": [],
+      "control": [],
+      "commands": [
+        {
+          "key": "tare",
+          "serial_cmd": "T\\r\\n"
+        },
+        {
+          "key": "zero",
+          "serial_cmd": "Z\\r\\n"
+        },
+        {
+          "key": "print",
+          "serial_cmd": "P\\r\\n"
+        }
+      ]
+    },
+    {
+      "_comment": "Fujitsu scale 1 — format 'WT:  23.50 kg', standard ASCII.",
+      "device_type": "weigher",
+      "device_id": "weigher_fujitsu_1",
+      "location": "area1",
+      "name": "scale_fujitsu_1",
+      "connection": {
+        "type": "serial_ascii",
+        "path": "COM6",
+        "baud": 9600,
+        "parity": "none",
+        "stop_bits": 1,
+        "data_bits": 7
+      },
+      "parser": {
+        "regex": "WT:\\s*(?P<weight>[0-9.]+)\\s*(?P<unit>\\S+)",
+        "byte_map": [],
+        "raw_topic": "raw"
+      },
+      "monitoring": [
+        {
+          "key": "weight",
+          "label": "Fujitsu Weight 1",
+          "topic": "weight/raw",
+          "type": "float",
+          "unit": "kg"
+        },
+        {
+          "key": "unit",
+          "label": "Fujitsu Unit 1",
+          "topic": "unit/raw",
+          "type": "string"
+        }
+      ],
+      "set": [],
+      "control": [],
+      "commands": [
+        {
+          "key": "tare",
+          "serial_cmd": "T\\r\\n"
+        },
+        {
+          "key": "zero",
+          "serial_cmd": "Z\\r\\n"
+        }
+      ]
+    },
+    {
+      "_comment": "Fujitsu scale 2 — different port, same parser.",
+      "device_type": "weigher",
+      "device_id": "weigher_fujitsu_2",
+      "location": "area1",
+      "name": "scale_fujitsu_2",
+      "connection": {
+        "type": "serial_ascii",
+        "path": "COM5",
+        "baud": 9600,
+        "parity": "none",
+        "stop_bits": 1,
+        "data_bits": 7
+      },
+      "parser": {
+        "regex": "WT:\\s*(?P<weight>[0-9.]+)\\s*(?P<unit>\\S+)",
+        "byte_map": [],
+        "raw_topic": "raw"
+      },
+      "monitoring": [
+        {
+          "key": "weight",
+          "label": "Fujitsu Weight 2",
+          "topic": "weight/raw",
+          "type": "float",
+          "unit": "kg"
+        },
+        {
+          "key": "unit",
+          "label": "Fujitsu Unit 2",
+          "topic": "unit/raw",
+          "type": "string"
+        }
+      ],
+      "set": [],
+      "control": [],
+      "commands": [
+        {
+          "key": "tare",
+          "serial_cmd": "T\\r\\n"
+        },
+        {
+          "key": "zero",
+          "serial_cmd": "Z\\r\\n"
+        }
+      ]
+    }
+  ],
+  "bridge": []
+}
