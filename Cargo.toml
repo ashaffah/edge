@@ -1,0 +1,65 @@
+[package]
+name = "edge-client"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "Edge agent: poll Modbus (TCP/RTU) from PLCs, publish each parameter to MQTT."
+
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+dotenvy = "0.15"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Edge-specific:
+#   tokio-modbus = async Modbus client. Features:
+#                    - `tcp`  = Modbus TCP (MBAP header)
+#                    - `rtu`  = RTU protocol codec (CRC framing). Does not
+#                               include a serial transport — bring your own
+#                               AsyncRead+AsyncWrite (TcpStream for
+#                               rtu-over-tcp, SerialStream for rtu_serial).
+#                    default-features=false drops the server impl + sync wrapper.
+#   tokio-serial = AsyncRead+AsyncWrite over a serial port. Used by the actor
+#                  task (modbus_actor) for rtu_serial connections.
+#                  A USB-RS485 adapter appears as a serial port via the CDC
+#                  driver, so this covers all gateway hardware without a
+#                  separate mode.
+#   rumqttc      = pure-Rust MQTT client. Chosen over paho-mqtt because it has
+#                  no C library dependency — easy to cross-compile for
+#                  ARM/embedded Linux. Features:
+#                    - default `use-rustls` = TLS via rustls (for mqtts/wss)
+#                    - `websocket` = enable Transport::Ws + Wss
+#                    - `url` = enable MqttOptions::parse_url (handles the
+#                      mqtt:// / mqtts:// / ws:// / wss:// schemes uniformly)
+tokio-modbus = { version = "0.17", default-features = false, features = [
+  "tcp",
+  "rtu",
+] }
+tokio-serial = "5"
+rumqttc = { version = "0.25", features = ["websocket", "url"] }
+
+# Resource monitoring:
+#   sysinfo          = CPU + memory, pure Rust, cross-platform.
+#   local-ip-address = IP detection. Separate from sysinfo because sysinfo's
+#                      Networks API is awkward for extracting the primary IP.
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+local-ip-address = "0.6"
+
+# Control gate (Valkey/Redis):
+#   redis = Redis/Valkey client for the authorization gate check. Features:
+#                   - `tokio-comp`         = AsyncCommands on the Tokio runtime
+#                   - `connection-manager` = auto-reconnect + retry handler
+#                 No TLS feature; edge ↔ Valkey is usually intra-VPC.
+redis = { version = "1.2", features = ["tokio-comp", "connection-manager"] }
+
+# Weigher serial ASCII: named-capture regex to parse scale output.
+# A new brand just needs a JSON update (different pattern) — no rebuild.
+regex = "1"
+
+# CLI arg parsing. Used for the `scale` subcommand (serial scale diagnostic
+# tool) — the default agent mode runs when no subcommand is given.
+clap = { version = "4", features = ["derive"] }
