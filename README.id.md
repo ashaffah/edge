@@ -229,7 +229,9 @@ memakai **named capture group**; tiap nama group harus cocok dengan `key`
 "parser": {
   "regex": "[A-Za-z-]*(?P<weight>[-+]?[0-9]+\\.[0-9]+)(?P<unit>[A-Za-z]*)",
   "byte_map": [ { "from": 176, "to": 48 } /* 0xB0→'0' … 0xB9→'9' */ ],
-  "raw_topic": "raw"      // opsional: publish juga semua group sebagai 1 objek JSON
+  "raw_topic": "raw",          // opsional: publish juga semua group sebagai 1 objek JSON
+  "stable": { "group": "st", "equals": "ST" }, // opsional: publish hanya pembacaan stabil
+  "read_timeout_ms": 5000       // opsional: reopen port jika sunyi selama ini
 }
 ```
 
@@ -238,6 +240,14 @@ memakai **named capture group**; tiap nama group harus cocok dengan `key`
   untuk `'0'`–`'9'`). Kosongkan untuk brand ASCII standar (mis. Fujitsu).
 - `raw_topic`, jika diisi, mem-publish `{"weight": 12.50, "unit": "kg"}` ke
   `{base}/{location}/{name}/{raw_topic}` di samping topic per-key.
+- `stable` menggerbangi publish berdasarkan flag stabil/motion timbangan: tambah
+  capture group untuk token status (mis. `(?P<st>ST|US)`) lalu set `group`/`equals`
+  — hanya baris yang token-nya sama dengan `equals` yang di-publish, sehingga
+  pembacaan saat bergerak dibuang. Hilangkan untuk mem-publish setiap baris.
+- `read_timeout_ms` adalah watchdog idle: jika port tetap terbuka tapi tidak
+  mengirim apa pun selama ini, koneksi di-reopen (menangkap port yang terbuka
+  tapi sunyi). Hilangkan untuk timbangan poll/on-demand yang idle antar
+  pembacaan; set beberapa kali interval output untuk timbangan kontinu.
 
 `commands[]` opsional memungkinkan operator mengendalikan timbangan lewat serial
 dari MQTT. Publish ke `{base}/{location}/{name}/cmd/{key}` menulis byte

@@ -227,7 +227,9 @@ using **named capture groups**; each group name must match a `monitoring` `key`.
 "parser": {
   "regex": "[A-Za-z-]*(?P<weight>[-+]?[0-9]+\\.[0-9]+)(?P<unit>[A-Za-z]*)",
   "byte_map": [ { "from": 176, "to": 48 } /* 0xB0→'0' … 0xB9→'9' */ ],
-  "raw_topic": "raw"      // optional: also publish all groups as one JSON object
+  "raw_topic": "raw",          // optional: also publish all groups as one JSON object
+  "stable": { "group": "st", "equals": "ST" }, // optional: publish only settled readings
+  "read_timeout_ms": 5000       // optional: reopen the port if silent this long
 }
 ```
 
@@ -236,6 +238,14 @@ using **named capture groups**; each group name must match a `monitoring` `key`.
   empty for standard-ASCII brands (e.g. Fujitsu).
 - `raw_topic`, if set, publishes `{"weight": 12.50, "unit": "kg"}` to
   `{base}/{location}/{name}/{raw_topic}` alongside the per-key topics.
+- `stable` gates publishing on the scale's stable/motion flag: add a capture
+  group for the status token (e.g. `(?P<st>ST|US)`) and set `group`/`equals` —
+  only lines whose token equals `equals` are published, so in-motion readings are
+  dropped. Omit to publish every parsed line.
+- `read_timeout_ms` is an idle watchdog: if the port stays open but sends nothing
+  for this long, the connection is reopened (catches a silent-but-open port).
+  Omit for poll/on-demand scales that are idle between reads; set it to a few
+  times the output interval for continuous scales.
 
 Optional `commands[]` let an operator drive the scale over serial from MQTT.
 Publishing to `{base}/{location}/{name}/cmd/{key}` writes the command's
