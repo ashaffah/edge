@@ -18,8 +18,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::shared::{DeviceConnection, DeviceEntry, DeviceType};
-use regex::Regex;
+use crate::shared::{DeviceConnection, DeviceEntry, DeviceType, StableRule};
+use regex::{Captures, Regex};
 use rumqttc::{AsyncClient, QoS};
 use serde_json::json;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -28,6 +28,11 @@ use tokio_serial::SerialPortBuilderExt;
 use tracing::{debug, info, warn};
 
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
+
+/// Upper bound on a single serial line. A stream that never sends a terminator
+/// can't grow the line buffer past this — bytes beyond it are dropped until the
+/// next `\r`/`\n`. Real scale lines are well under this.
+const MAX_LINE_LEN: usize = 1024;
 
 /// Run all weigher loops concurrently.
 ///
@@ -134,13 +139,38 @@ async fn read_line_any(
             } else if b == b'\n' {
                 reader.consume(consumed);
                 return Ok(n);
-            } else {
+            } else if buf.len() < MAX_LINE_LEN {
                 buf.push(b);
                 n += 1;
             }
+            // else: line exceeds MAX_LINE_LEN — keep scanning for a terminator
+            // but stop buffering, so memory stays bounded.
         }
         reader.consume(consumed);
     }
+}
+
+/// `read_line_any` with an optional idle timeout. `None` = wait indefinitely
+/// (current behaviour); `Some(t)` = fail with `Elapsed` if no full line arrives
+/// within `t`, so the caller can reopen a silent-but-open port.
+async fn read_line_with_timeout(
+    reader: &mut (impl AsyncBufRead + Unpin),
+    buf: &mut Vec<u8>,
+    timeout: Option<Duration>,
+) -> Result<std::io::Result<usize>, tokio::time::error::Elapsed> {
+    match timeout {
+        Some(t) => tokio::time::timeout(t, read_line_any(reader, buf)).await,
+        None => Ok(read_line_any(reader, buf).await),
+    }
+}
+
+/// True when the stability gate is satisfied: the capture group `rule.group`
+/// exists and its trimmed value equals `rule.equals`. A missing group returns
+/// false — we can't confirm the reading is stable, so we don't publish it.
+fn caps_is_stable(caps: &Captures, rule: &StableRule) -> bool {
+    caps.name(&rule.group)
+        .map(|m| m.as_str().trim() == rule.equals)
+        .unwrap_or(false)
 }
 
 /// One weigher loop: open serial, split read/write, run both paths.
@@ -211,6 +241,10 @@ async fn run_one(
         }
     };
 
+    // Idle watchdog: reopen if the port is open but silent for this long.
+    // `None` (unset in mapping) preserves the wait-indefinitely behaviour.
+    let read_timeout = parser.read_timeout_ms.map(Duration::from_millis);
+
     loop {
         let port = tokio_serial::new(&path, baud)
             .data_bits(parse_data_bits(data_bits))
@@ -240,11 +274,15 @@ async fn run_one(
             buf.clear();
             tokio::select! {
                 // Read a line from serial — handle \r, \n, or \r\n
-                result = read_line_any(&mut reader, &mut buf) => {
+                result = read_line_with_timeout(&mut reader, &mut buf, read_timeout) => {
                     match result {
-                        Ok(0) => { warn!(device_id = %device.device_id, "serial EOF, reopen"); break; }
-                        Ok(_) => {}
-                        Err(e) => { warn!(device_id = %device.device_id, "serial read error: {e:#}, reopen"); break; }
+                        Err(_elapsed) => {
+                            warn!(device_id = %device.device_id, timeout_ms = parser.read_timeout_ms.unwrap_or(0), "serial read idle timeout, reopen");
+                            break;
+                        }
+                        Ok(Ok(0)) => { warn!(device_id = %device.device_id, "serial EOF, reopen"); break; }
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => { warn!(device_id = %device.device_id, "serial read error: {e:#}, reopen"); break; }
                     }
 
                     if buf.is_empty() { continue; }
@@ -264,6 +302,14 @@ async fn run_one(
                             continue;
                         }
                     };
+
+                    // Stability gate: skip in-motion readings when configured.
+                    if let Some(rule) = &parser.stable
+                        && !caps_is_stable(&caps, rule)
+                    {
+                        debug!(device_id = %device.device_id, group = %rule.group, line = %s, "reading not stable, skip");
+                        continue;
+                    }
 
                     // Publish each key
                     for (key, topic) in &topic_map {
@@ -399,5 +445,45 @@ mod tests {
         // "R\r\n" → [b'R', b'\r', b'\n']
         let result = parse_serial_cmd("R\\r\\n");
         assert_eq!(result, b"R\r\n");
+    }
+
+    #[test]
+    fn stable_gate_publishes_only_matching_token() {
+        let re = Regex::new(r"(?P<st>ST|US),\s*(?P<weight>[0-9.]+)").unwrap();
+        let rule = StableRule {
+            group: "st".into(),
+            equals: "ST".into(),
+        };
+        assert!(caps_is_stable(&re.captures("ST, 12.50").unwrap(), &rule));
+        assert!(!caps_is_stable(&re.captures("US, 12.50").unwrap(), &rule));
+    }
+
+    #[test]
+    fn stable_gate_denies_when_group_absent() {
+        // The stability group isn't present in the match → cannot confirm
+        // stability, so deny (don't publish).
+        let re = Regex::new(r"(?P<weight>[0-9.]+)").unwrap();
+        let rule = StableRule {
+            group: "st".into(),
+            equals: "ST".into(),
+        };
+        assert!(!caps_is_stable(&re.captures("12.50").unwrap(), &rule));
+    }
+
+    #[tokio::test]
+    async fn read_line_any_bounds_buffer_without_terminator() {
+        // A very long run of bytes with no terminator must not grow the buffer
+        // past MAX_LINE_LEN; the trailing \r\n still terminates the line.
+        let mut data = vec![b'x'; MAX_LINE_LEN + 500];
+        data.extend_from_slice(b"\r\n");
+        let mut reader = BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+        let n = read_line_any(&mut reader, &mut buf).await.unwrap();
+        assert!(
+            buf.len() <= MAX_LINE_LEN,
+            "buffer {} exceeded cap",
+            buf.len()
+        );
+        assert!(n <= MAX_LINE_LEN);
     }
 }

@@ -725,6 +725,35 @@ pub struct WeigherParser {
     /// Example: `"raw_topic": "raw"` → publishes to `.../scale_gsc/raw`
     #[serde(default)]
     pub raw_topic: Option<String>,
+    /// Optional stability gate: only publish a line when the scale reports a
+    /// stable (settled) reading. Requires a named capture group in `regex` for
+    /// the status token. Absent = publish every parsed line (default).
+    #[serde(default)]
+    pub stable: Option<StableRule>,
+    /// Optional read-idle watchdog, in milliseconds. If the serial port stays
+    /// open but sends nothing for longer than this, the connection is reopened
+    /// (guards against a silent-but-open port that would otherwise stall
+    /// forever). Leave unset for poll/on-demand scales that are legitimately
+    /// idle between reads; set it to a few times the output interval for
+    /// continuous-streaming scales.
+    #[serde(default)]
+    pub read_timeout_ms: Option<u64>,
+}
+
+/// Stability gate for a weigher: publish a reading only when the scale reports a
+/// stable measurement (not in motion). Many scales emit a status token like
+/// `ST` (stable) vs `US`/`MO` (motion) at the start of each line — capture it in
+/// `regex` and point this rule at that group.
+///
+/// Example: `regex` `"(?P<st>ST|US),\\s*(?P<weight>[0-9.]+)"` with
+/// `"stable": { "group": "st", "equals": "ST" }` publishes only `ST` lines.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StableRule {
+    /// Name of the regex capture group holding the stability token.
+    pub group: String,
+    /// The value that means "stable". A line publishes only when the captured
+    /// group equals this (after trimming); any other value is skipped.
+    pub equals: String,
 }
 
 /// One byte-substitution rule: replace a byte valued `from` with `to`.
