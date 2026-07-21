@@ -35,9 +35,9 @@ const RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 /// The PLC and source devices are polled separately:
 /// - PLC: `entries` + `holding_count` + `coil_count`, polled via
 ///   `reader_factory` (unit_id from the mapping's primary PLC).
-/// - Source (chiller, etc.): each entry in `source_sessions`, polled via a
-///   `ReaderFactory` already `.with_unit_id(source.unit_id)`. An error on one
-///   source does not affect the PLC poll loop or the other sources.
+/// - Source (chiller, etc.): each entry in `source_sessions`, polled via its own
+///   `ReaderFactory` (built with the device's unit_id). An error on one source
+///   does not affect the PLC poll loop or the other sources.
 #[derive(Clone)]
 pub struct TelemetryConfig {
     pub reader_factory: ReaderFactory,
@@ -64,7 +64,7 @@ pub struct SourcePollSession {
     /// This device's machine id `{location}/{name}` — used for the per-machine
     /// plc_status topic (`{base}/{machine_id}/plc/status`).
     pub machine_id: String,
-    /// ReaderFactory with this source's unit_id (derived via `with_unit_id`).
+    /// ReaderFactory for this source (built with the device's unit_id).
     pub reader_factory: ReaderFactory,
     /// Holding + coil entries — bulk read from address 0.
     pub entries: Vec<TopicEntry>,
@@ -82,7 +82,7 @@ impl TelemetryConfig {
     pub async fn from_settings(
         settings: &Settings,
         reader_factory: ReaderFactory,
-        serial_cache: &crate::modbus_client::SerialActorCache,
+        actor_cache: &crate::modbus_client::ActorCache,
     ) -> Result<Self> {
         let modbus = settings
             .modbus
@@ -139,7 +139,7 @@ impl TelemetryConfig {
                 continue;
             }
             let source_reader_factory =
-                crate::modbus_client::build_source_reader(&device.connection, serial_cache)
+                crate::modbus_client::build_source_reader(&device.connection, actor_cache)
                     .await
                     .with_context(|| format!("build source reader for slave '{}'", device_id))?;
             let input_entries: Vec<TopicEntry> = source_entries
