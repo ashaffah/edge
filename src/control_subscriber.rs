@@ -117,7 +117,7 @@ impl ControlSubscriberConfig {
     pub async fn from_settings(
         settings: &Settings,
         plc_writer_factory: WriterFactory,
-        serial_cache: &crate::modbus_client::SerialActorCache,
+        actor_cache: &crate::modbus_client::ActorCache,
     ) -> Result<Self> {
         settings.modbus.as_ref().context(
             "ControlSubscriberConfig::from_settings called without a PLC in the mapping",
@@ -143,7 +143,7 @@ impl ControlSubscriberConfig {
             }
             // Additional PLC or slave — build the factory from the connection block.
             let factory =
-                crate::modbus_client::build_source_writer(&device.connection, serial_cache)
+                crate::modbus_client::build_source_writer(&device.connection, actor_cache)
                     .await
                     .with_context(|| format!("build writer for device '{}'", device.device_id))?;
             writer_factories

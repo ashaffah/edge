@@ -1,8 +1,11 @@
-//! Actor task for RTU mode (RTU-over-TCP & RTU-Serial).
+//! Actor task for every Modbus transport (TCP, RTU-over-TCP, RTU-Serial).
 //!
-//! Modbus RTU = half-duplex, one physical port. It can't be opened twice
-//! (serial port: OS lock; RTU-over-TCP: the gateway converter usually doesn't
-//! handle multi-client well). So we use the actor pattern:
+//! A single connection that serializes all requests. Needed because the physical
+//! link can't be opened twice safely: serial port = OS exclusive lock; RTU-over-TCP
+//! = the gateway converter usually mishandles multi-client; plain TCP = many small
+//! PLCs / Modbus-TCP gateways accept only ONE concurrent socket, so a separate
+//! reader + writer socket to the same host:port would make the second one fail
+//! (write returns EINPROGRESS / os error 115). So we use the actor pattern:
 //!
 //! - **One task** that owns the connection (serial port or TcpStream).
 //! - **An mpsc channel** for inbound requests from telemetry + control + bridge.
@@ -38,7 +41,7 @@ use async_trait::async_trait;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio_modbus::client::Context as ModbusContext;
-use tokio_modbus::prelude::{Reader, Slave, SlaveContext, Writer, rtu};
+use tokio_modbus::prelude::{Reader, Slave, SlaveContext, Writer, rtu, tcp};
 use tracing::{debug, info, warn};
 
 use crate::modbus_client::{ReadConn, WriteConn};
@@ -133,22 +136,12 @@ impl ActorHandle {
 /// Requests that arrive before the connect finishes are queued and executed once
 /// the connection is up.
 ///
-/// An error here means the transport is fundamentally invalid (e.g. an
-/// unsupported variant). Network errors don't surface — the actor handles them
-/// internally.
+/// Returns `Result` for call-site ergonomics, but currently never fails: every
+/// transport is supported and network errors don't surface here — the actor
+/// handles connect/reconnect internally.
 pub async fn spawn(transport: Transport, unit_id: u8, timings: RtuTimings) -> Result<ActorHandle> {
-    // Sanity check at startup so misconfig is detected quickly. The real connect
-    // happens inside the actor loop (for automatic retry-on-fail).
-    match &transport {
-        Transport::RtuOverTcp { .. } | Transport::RtuSerial { .. } => {}
-        Transport::Tcp { .. } => {
-            return Err(anyhow!(
-                "modbus_actor::spawn called with Transport::Tcp; this is a bug — \
-                 TCP should use ModbusReader/Writer direct"
-            ));
-        }
-    }
-
+    // The real connect happens inside the actor loop (for automatic
+    // retry-on-fail); nothing to validate up front — all transports are handled.
     let (tx, rx) = mpsc::channel(INBOX_CAP);
     tokio::spawn(run_actor(transport, timings, rx));
     Ok(ActorHandle {
@@ -535,9 +528,17 @@ async fn connect(transport: &Transport) -> Result<ModbusContext> {
             tokio::time::sleep(Duration::from_millis(200)).await;
             Ok(rtu::attach_slave(stream, DUMMY_SLAVE))
         }
-        Transport::Tcp { .. } => Err(anyhow!(
-            "actor connect should not be called with Tcp transport — bug in factory"
-        )),
+        Transport::Tcp { host, port } => {
+            let addr = format!("{host}:{port}");
+            let stream = tokio::net::TcpStream::connect(&addr)
+                .await
+                .with_context(|| format!("tcp connect {addr}"))?;
+            // Standard Modbus TCP framing (MBAP). One shared connection,
+            // serialized by this actor, so a single-session PLC/gateway isn't hit
+            // by two concurrent sockets (reader + writer). The slave/unit is set
+            // per request via `ctx.set_slave()`.
+            Ok(tcp::attach_slave(stream, DUMMY_SLAVE))
+        }
     }
 }
 
@@ -571,22 +572,18 @@ fn map_data_bits(d: SerialDataBits) -> tokio_serial::DataBits {
 mod tests {
     use super::*;
 
-    /// Sanity: spawn() explicitly rejects the Tcp transport. Defensive —
-    /// without this, a factory bug could slip through into an actor task that
-    /// immediately crashes in connect(). Better to fail in spawn() at startup.
+    /// spawn() accepts every transport, including plain Modbus TCP. The actor
+    /// task connects (and reconnects) in the background; spawn itself returns Ok
+    /// without touching the network.
     #[tokio::test]
-    async fn spawn_rejects_tcp_transport() {
+    async fn spawn_accepts_tcp_transport() {
         let t = Transport::Tcp {
             host: "127.0.0.1".into(),
             port: 502,
         };
         let res = spawn(t, 1, RtuTimings::default()).await;
-        assert!(res.is_err(), "spawn must reject Tcp transport");
-        let msg = res.unwrap_err().to_string();
-        assert!(
-            msg.contains("Tcp"),
-            "error message should mention Tcp, got: {msg}"
-        );
+        assert!(res.is_ok(), "spawn must accept Tcp transport");
+        // Drop the handle → channel closes → the background actor exits.
     }
 
     /// Reply type assertion: if the actor reply variant mismatches (a bug in

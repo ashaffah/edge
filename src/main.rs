@@ -155,10 +155,10 @@ async fn main() -> Result<()> {
     // If there isn't, the telemetry/control/plc_status tasks use pending()
     // (idle).
     // ---------------------------------------------------------------------------
-    let serial_cache = modbus_client::SerialActorCache::new();
+    let actor_cache = modbus_client::ActorCache::new();
 
     let (reader_factory_opt, writer_factory_opt) = if let Some(modbus) = &settings.modbus {
-        let (rf, wf) = modbus_client::build_io(modbus, &serial_cache)
+        let (rf, wf) = modbus_client::build_io(modbus, &actor_cache)
             .await
             .context("build modbus I/O")?;
         (Some(rf), Some(wf))
@@ -170,10 +170,10 @@ async fn main() -> Result<()> {
         let (plc_status_tx, plc_status_rx) = tokio::sync::watch::channel(false);
 
         let tc =
-            edge_client::telemetry::TelemetryConfig::from_settings(&settings, rf, &serial_cache)
+            edge_client::telemetry::TelemetryConfig::from_settings(&settings, rf, &actor_cache)
                 .await
                 .context("build telemetry config")?;
-        let cc = ControlSubscriberConfig::from_settings(&settings, wf, &serial_cache)
+        let cc = ControlSubscriberConfig::from_settings(&settings, wf, &actor_cache)
             .await
             .context("build control subscriber config")?;
 
