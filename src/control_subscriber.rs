@@ -151,7 +151,11 @@ impl ControlSubscriberConfig {
                 .or_insert(factory);
         }
 
-        let subscribe_patterns = build_subscribe_patterns(settings);
+        let subscribe_patterns = build_subscribe_patterns(
+            &settings.base_topic,
+            &settings.machine_id,
+            &settings.mapping,
+        );
 
         Ok(Self {
             subscribe_patterns,
@@ -161,20 +165,27 @@ impl ControlSubscriberConfig {
     }
 }
 
-/// Assemble the list of subscribe patterns: PLC control/# + set/#, plus
-/// per-source. Sources use their own location+name (not nested under the
-/// machine).
-fn build_subscribe_patterns(settings: &Settings) -> Vec<String> {
-    let base = &settings.base_topic;
-    let machine = &settings.machine_id;
+/// Assemble the list of subscribe patterns: primary PLC control/# + set/#, plus
+/// one pair per other device (additional PLCs + slaves), using their own
+/// location+name.
+///
+/// Pure function (`base` + `machine` + `mapping`, not `&Settings`) so it can be
+/// unit-tested without env — like [`build_entries_map`].
+fn build_subscribe_patterns(base: &str, machine: &str, mapping: &DeviceMapping) -> Vec<String> {
     let mut patterns = vec![
         format!("{base}/{machine}/control/#"),
         format!("{base}/{machine}/set/#"),
     ];
-    for device in &settings.mapping.devices {
+    // The primary PLC (first Master = machine_id) is already covered by the
+    // machine patterns above. Every other device — additional PLCs and slaves —
+    // has its own location/name and needs its own patterns. Skip only the first
+    // Master; consistent with `primary_plc_registered` in `from_settings`.
+    let mut primary_plc_skipped = false;
+    for device in &mapping.devices {
         use crate::shared::DeviceType;
-        if device.device_type == DeviceType::Master {
-            continue; // PLC already covered by machine patterns above
+        if device.device_type == DeviceType::Master && !primary_plc_skipped {
+            primary_plc_skipped = true;
+            continue;
         }
         patterns.push(format!(
             "{base}/{}/{}/control/#",
@@ -968,5 +979,58 @@ mod tests {
         assert!(expected.contains(&"acme/site/area1/machine_a/set/#".to_string()));
         assert!(expected.contains(&"acme/site/area1/chiller/control/#".to_string()));
         assert!(expected.contains(&"acme/site/area1/chiller/set/#".to_string()));
+    }
+
+    /// Regression: two PLCs on one edge-client (machine_a primary + machine_b
+    /// second). The primary is covered by the machine patterns; the second PLC
+    /// must get its own patterns, otherwise its control is never subscribed
+    /// (multi-PLC bug).
+    #[test]
+    fn subscribe_patterns_include_every_plc_not_just_the_first() {
+        use crate::shared::DeviceMapping;
+        let json = r#"{
+            "base_topic": "acme/site",
+            "devices": [
+                {
+                    "device_type": "master", "device_id": "plc1", "location": "area1", "name": "machine_a",
+                    "connection": { "type": "tcp", "host": "192.168.10.10", "port": 502, "unit_id": 1 },
+                    "monitoring": [], "set": [],
+                    "control": [
+                        { "key": "control_lamp", "label": "Lamp", "topic": "control/lamp",
+                          "type": "boolean", "modbus": { "kind": "write_single_coil", "address": 5 } }
+                    ]
+                },
+                {
+                    "device_type": "master", "device_id": "plc2", "location": "area2", "name": "machine_b",
+                    "connection": { "type": "tcp", "host": "192.168.10.11", "port": 502, "unit_id": 1 },
+                    "monitoring": [], "set": [],
+                    "control": [
+                        { "key": "control_lamp", "label": "Lamp", "topic": "control/lamp",
+                          "type": "boolean", "modbus": { "kind": "write_single_coil", "address": 5 } }
+                    ]
+                }
+            ]
+        }"#;
+        let mapping = serde_json::from_str::<DeviceMapping>(json).unwrap();
+        let patterns = build_subscribe_patterns("acme/site", "area1/machine_a", &mapping);
+
+        // Primary (machine_a) via machine patterns.
+        assert!(patterns.contains(&"acme/site/area1/machine_a/control/#".to_string()));
+        assert!(patterns.contains(&"acme/site/area1/machine_a/set/#".to_string()));
+        // Second PLC (machine_b) — the bug: this was missing.
+        assert!(
+            patterns.contains(&"acme/site/area2/machine_b/control/#".to_string()),
+            "second PLC control topic must be subscribed"
+        );
+        assert!(patterns.contains(&"acme/site/area2/machine_b/set/#".to_string()));
+        // Primary must not be subscribed twice (machine + device pattern).
+        assert_eq!(
+            patterns
+                .iter()
+                .filter(|p| p.as_str() == "acme/site/area1/machine_a/control/#")
+                .count(),
+            1,
+            "primary PLC must not be double-subscribed"
+        );
     }
 }
