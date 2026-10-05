@@ -2,7 +2,7 @@
 name = "edge-client"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.99"
 description = "Edge agent: poll Modbus (TCP/RTU) from PLCs, publish each parameter to MQTT."
 
 [dependencies]
