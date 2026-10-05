@@ -94,6 +94,9 @@ pub struct ControlEntry {
     /// write_single_register). False for write_multiple_registers (set/setpoint)
     /// — no gate by design.
     pub requires_gate: bool,
+    /// Gate field in the Valkey hash for the target device: `{base_topic}/{location}/{name}`.
+    /// Stored per entry because each PLC/slave in the mapping is granted on its own.
+    pub gate_field: String,
 }
 
 /// Runtime config for the control + set subscriber. Derived once at startup,
@@ -123,7 +126,7 @@ impl ControlSubscriberConfig {
             "ControlSubscriberConfig::from_settings called without a PLC in the mapping",
         )?;
         let idx = TopicIndex::from_device_mapping(&settings.base_topic, &settings.mapping);
-        let entries = build_entries_map(&idx, &settings.mapping);
+        let entries = build_entries_map(&settings.base_topic, &idx, &settings.mapping);
 
         // Writer factory per device_id.
         // Primary PLC: use the factory already built in main (plc_writer_factory).
@@ -208,7 +211,11 @@ fn build_subscribe_patterns(base: &str, machine: &str, mapping: &DeviceMapping) 
 ///
 /// Routing to the writer factory uses `device_id` (not unit_id) so two PLCs on
 /// different ports but with the same unit_id get the correct connection.
-fn build_entries_map(idx: &TopicIndex, mapping: &DeviceMapping) -> HashMap<String, ControlEntry> {
+fn build_entries_map(
+    base: &str,
+    idx: &TopicIndex,
+    mapping: &DeviceMapping,
+) -> HashMap<String, ControlEntry> {
     // The primary PLC's device_id (device=None in TopicEntry).
     let primary_plc_device_id: String = mapping
         .devices
@@ -291,6 +298,7 @@ fn build_entries_map(idx: &TopicIndex, mapping: &DeviceMapping) -> HashMap<Strin
                 action,
                 device_id,
                 requires_gate,
+                gate_field: format!("{base}/{}", e.machine),
             },
         );
     }
@@ -353,14 +361,14 @@ async fn handle_publish(
     };
 
     // Gate check ONLY for write_single_coil / write_single_register.
-    if entry.requires_gate && !gate.is_granted().await {
+    if entry.requires_gate && !gate.is_granted(&entry.gate_field).await {
         info!(
             key = %entry.key,
             topic = %p.topic,
             device_id = %entry.device_id,
-            machine = %gate.machine_field(),
+            machine = %entry.gate_field,
             "control: gate DENY, skip (grant: `redis-cli HSET control global 1 && redis-cli HSET control {} 1`)",
-            gate.machine_field()
+            entry.gate_field
         );
         return Ok(());
     }
@@ -801,7 +809,7 @@ mod tests {
     fn entries_includes_control_coil_register_and_set_for_plc_and_source() {
         let m = build_test_mapping();
         let idx = build_test_index(&m);
-        let entries = build_entries_map(&idx, &m);
+        let entries = build_entries_map("acme/site", &idx, &m);
 
         // Expected entries (6):
         // PLC:    control_lamp, control_valve_up, set_speed, set_time
@@ -918,7 +926,7 @@ mod tests {
         }"#;
         let m = serde_json::from_str::<DeviceMapping>(json).unwrap();
         let idx = TopicIndex::from_device_mapping("acme/site", &m);
-        let entries = build_entries_map(&idx, &m);
+        let entries = build_entries_map("acme/site", &idx, &m);
         assert!(
             entries.is_empty(),
             "a read binding in the control section must be skipped (not a write variant)"
@@ -944,7 +952,7 @@ mod tests {
         }"#;
         let m = serde_json::from_str::<DeviceMapping>(json).unwrap();
         let idx = TopicIndex::from_device_mapping("acme/site", &m);
-        let entries = build_entries_map(&idx, &m);
+        let entries = build_entries_map("acme/site", &idx, &m);
         let pulse = entries
             .get("acme/site/area1/machine_a/control/pulse")
             .expect("control_pulse should be included");
@@ -1013,6 +1021,22 @@ mod tests {
         }"#;
         let mapping = serde_json::from_str::<DeviceMapping>(json).unwrap();
         let patterns = build_subscribe_patterns("acme/site", "area1/machine_a", &mapping);
+
+        // Granting only machine_b must open machine_b and leave machine_a closed
+        // (the gate used to always check the first PLC's field).
+        let idx = TopicIndex::from_device_mapping("acme/site", &mapping);
+        let entries = build_entries_map("acme/site", &idx, &mapping);
+        let a = &entries["acme/site/area1/machine_a/control/lamp"];
+        let b = &entries["acme/site/area2/machine_b/control/lamp"];
+        assert_eq!(a.gate_field, "acme/site/area1/machine_a");
+        assert_eq!(b.gate_field, "acme/site/area2/machine_b");
+        let grant_b: HashMap<String, String> =
+            [("global", "1"), ("acme/site/area2/machine_b", "1")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+        assert!(crate::control_gate::evaluate_gate(&grant_b, &b.gate_field));
+        assert!(!crate::control_gate::evaluate_gate(&grant_b, &a.gate_field));
 
         // Primary (machine_a) via machine patterns.
         assert!(patterns.contains(&"acme/site/area1/machine_a/control/#".to_string()));

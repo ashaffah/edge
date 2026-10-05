@@ -9,10 +9,10 @@
 //! - Granted **iff** `map["global"] == "1"` **AND**
 //!   `map[<machine_field>] == "1"`. Strict string equality — only the literal
 //!   `"1"` grants.
-//! - **Field name format**: `{base_topic}/{machine_id}`, e.g.
-//!   `acme/site/area1/machine_a`. This matches the MQTT topic prefix so
-//!   operators use a consistent identifier. Built by
-//!   [`crate::settings::Settings::control_gate_field`].
+//! - **Field name format**: `{base_topic}/{location}/{name}` of the target
+//!   device, e.g. `acme/site/area1/machine_a`. Same as the MQTT topic prefix.
+//!   Computed per entry (`ControlEntry::gate_field`) since one mapping can
+//!   hold several PLCs/slaves and each is granted on its own.
 //! - Operators flip flags manually via `redis-cli`:
 //!   ```sh
 //!   redis-cli HSET control global 1
@@ -36,7 +36,7 @@ pub const DEFAULT_GATE_KEY: &str = "control";
 pub const GLOBAL_FIELD: &str = "global";
 
 /// Authorization gate for Modbus writes. Wraps an optional Redis connection +
-/// hash key + machine_id (= the per-machine field in the hash).
+/// hash key. The machine field is passed in on each [`ControlGate::is_granted`] call.
 ///
 /// `conn = None` semantics: deny all control (Redis unavailable or URL not
 /// set). Deliberately not `Option<ConnectionManager>` at the call site — the
@@ -44,7 +44,6 @@ pub const GLOBAL_FIELD: &str = "global";
 pub struct ControlGate {
     conn: Option<ConnectionManager>,
     hash_key: String,
-    machine_field: String,
 }
 
 impl ControlGate {
@@ -55,7 +54,7 @@ impl ControlGate {
     /// Does not return `Result` because Redis being down must not block
     /// edge-client startup (telemetry + heartbeat still run, only control is
     /// denied until the operator fixes Redis).
-    pub async fn connect(url: Option<&str>, hash_key: String, machine_field: String) -> Self {
+    pub async fn connect(url: Option<&str>, hash_key: String) -> Self {
         let Some(url) = url else {
             warn!(
                 "control gate: CACHE_URL empty, gate DISABLED (all control \
@@ -64,7 +63,6 @@ impl ControlGate {
             return Self {
                 conn: None,
                 hash_key,
-                machine_field,
             };
         };
         let conn = match Self::try_connect(url).await {
@@ -81,15 +79,10 @@ impl ControlGate {
         if conn.is_some() {
             info!(
                 hash_key = %hash_key,
-                machine_field = %machine_field,
                 "control gate active — HGETALL hash → granted iff global=1 AND {{machine}}=1"
             );
         }
-        Self {
-            conn,
-            hash_key,
-            machine_field,
-        }
+        Self { conn, hash_key }
     }
 
     async fn try_connect(url: &str) -> Result<ConnectionManager> {
@@ -99,13 +92,7 @@ impl ControlGate {
             .context("connect to redis (ConnectionManager)")
     }
 
-    /// The field name in the hash for this machine. Used by the `dispatch` log
-    /// so it can give the operator the exact `redis-cli` command.
-    pub fn machine_field(&self) -> &str {
-        &self.machine_field
-    }
-
-    /// Check whether the operator has granted control for this machine.
+    /// Check whether the operator has granted control for `machine_field`.
     ///
     /// Returns `true` **only** if:
     /// 1. The Redis connection is active (gate enabled), and
@@ -116,7 +103,7 @@ impl ControlGate {
     /// If **any** of the above is false → returns `false` with a warning log.
     /// Does not return `Result` — the caller (`dispatch`) doesn't need to know
     /// the detailed reason, just "allowed or not".
-    pub async fn is_granted(&mut self) -> bool {
+    pub async fn is_granted(&mut self, machine_field: &str) -> bool {
         let Some(conn) = self.conn.as_mut() else {
             // Gate disabled at startup, already logged a warning — don't spam
             // per message.
@@ -132,7 +119,7 @@ impl ControlGate {
                 return false;
             }
         };
-        evaluate_gate(&map, &self.machine_field)
+        evaluate_gate(&map, machine_field)
     }
 }
 
@@ -161,8 +148,8 @@ pub fn evaluate_gate(map: &HashMap<String, String>, machine_field: &str) -> bool
 mod tests {
     use super::*;
 
-    /// Field format `{base_topic}/{machine_id}` — in production built by
-    /// `Settings::control_gate_field()`. Hardcoded here for readability without
+    /// Field format `{base_topic}/{location}/{name}`, built in production by
+    /// `control_subscriber::build_entries_map`. Hardcoded here for readability without
     /// having to mock Settings.
     const FIELD_750: &str = "acme/site/area1/machine_a";
     const FIELD_350: &str = "acme/site/area1/machine_b";

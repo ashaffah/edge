@@ -219,7 +219,6 @@ async fn main() -> Result<()> {
         let gate = ControlGate::connect(
             settings.control_gate.url.as_deref(),
             settings.control_gate.hash_key.clone(),
-            settings.control_gate_field(),
         )
         .await;
 

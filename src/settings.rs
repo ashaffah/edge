@@ -172,10 +172,6 @@ impl Settings {
     pub fn broker_uri(&self) -> String {
         format!("{}:{}", self.mqtt.host, self.mqtt.port)
     }
-
-    pub fn control_gate_field(&self) -> String {
-        format!("{}/{}", self.base_topic, self.machine_id)
-    }
 }
 
 /// Derive machine_id from the DeviceMapping.
