@@ -2,17 +2,17 @@
 # build.sh <target> [crate...]
 #
 # Arguments:
-#   <target>   — platform target (required)
-#   [crate...] — crate whose binary is copied to bin/ (optional, default: all)
+#   <target>    platform target (required)
+#   [crate...]  crate whose binary is copied to bin/ (optional, default: all)
 #
 # Available targets:
-#   armv7-musl      — Raspberry Pi OS 32-bit, static binary (recommended)
-#   armv7-glibc     — Raspberry Pi OS 32-bit, dynamic glibc
-#   aarch64         — Raspberry Pi OS 64-bit or another ARM64 board
-#   x86_64          — Linux x86_64, dynamic glibc
-#   x86_64-musl     — Linux x86_64, static binary
-#   win-x86_64-gnu  — Windows x86_64, cross-compile via mingw-w64
-#   win-x86_64-msvc — Windows x86_64, cross-compile via cargo-xwin (MSVC ABI)
+#   armv7-musl       Raspberry Pi OS 32-bit, static binary (recommended)
+#   armv7-glibc      Raspberry Pi OS 32-bit, dynamic glibc
+#   aarch64          Raspberry Pi OS 64-bit or another ARM64 board
+#   x86_64           Linux x86_64, dynamic glibc
+#   x86_64-musl      Linux x86_64, static binary
+#   win-x86_64-gnu   Windows x86_64, cross-compile via mingw-w64
+#   win-x86_64-msvc  Windows x86_64, cross-compile via cargo-xwin (MSVC ABI)
 #
 # Examples:
 #   bash build.sh armv7-musl
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Crate registry — add an entry here when the project gains a new binary.
+# Crate registry. Add an entry here when the project gains a new binary.
 # Not using declare -A so it stays compatible with bash 3.2 (macOS default).
 # ---------------------------------------------------------------------------
 
@@ -110,7 +110,7 @@ case "$TARGET" in
     ;;
 esac
 
-# Binary extension — Windows uses .exe, other platforms don't.
+# Binary extension: Windows uses .exe, other platforms don't.
 case "$TARGET" in
   win-*) BIN_EXT=".exe" ;;
   *)     BIN_EXT=""     ;;

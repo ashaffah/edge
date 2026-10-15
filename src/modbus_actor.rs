@@ -7,25 +7,25 @@
 //! reader + writer socket to the same host:port would make the second one fail
 //! (write returns EINPROGRESS / os error 115). So we use the actor pattern:
 //!
-//! - **One task** that owns the connection (serial port or TcpStream).
-//! - **An mpsc channel** for inbound requests from telemetry + control + bridge.
-//! - **A oneshot reply** per request — the caller awaits the reply before
-//!   sending the next request. Sequential by design: requests cannot overlap on
+//! - One task that owns the connection (serial port or TcpStream).
+//! - An mpsc channel for inbound requests from telemetry + control + bridge.
+//! - A oneshot reply per request. The caller awaits the reply before
+//!   sending the next request, so requests cannot overlap on
 //!   the bus.
-//! - **Internal reconnect**: on a connection error or request timeout, the actor
+//! - Internal reconnect: on a connection error or request timeout, the actor
 //!   backs off + reconnects, and pending requests are drained with a fast error.
 //!
 //! ## Sequential guarantee
 //!
 //! Because the channel is FIFO + the actor awaits each request until it
 //! completes (or times out), requests from different tasks (telemetry, control,
-//! bridge) are automatically serialized — no two frames on the bus at once.
+//! bridge) are serialized, so there are never two frames on the bus at once.
 //!
 //! ## Multi-slave (chiller + PLC on one RS-485 bus)
 //!
 //! `ActorHandle` carries a `slave_id`. A caller that needs to target a different
-//! slave uses [`ActorHandle::with_slave_id`] — cheap, just cloning the sender +
-//! changing the ID. The actor calls `ctx.set_slave()` before executing and adds
+//! slave uses [`ActorHandle::with_slave_id`], which only clones the sender and
+//! changes the ID. The actor calls `ctx.set_slave()` before executing and adds
 //! [`RtuTimings::inter_frame_delay`] when the slave ID changes from the previous
 //! request.
 //!
@@ -47,7 +47,7 @@ use tracing::{debug, info, warn};
 use crate::modbus_client::{ReadConn, WriteConn};
 use crate::settings::{SerialDataBits, SerialParity, SerialStopBits, Transport};
 
-/// Backoff between reconnect attempts — same as `telemetry::RECONNECT_BACKOFF`
+/// Backoff between reconnect attempts, same as `telemetry::RECONNECT_BACKOFF`
 /// and `control_subscriber::RECONNECT_BACKOFF`.
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 
@@ -58,11 +58,11 @@ const RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 /// actor is stuck. Full = the caller's `send().await` blocks until drained.
 const INBOX_CAP: usize = 32;
 
-/// Default timeout per request — used by [`RtuTimings::default()`].
+/// Default timeout per request, used by [`RtuTimings::default()`].
 /// 500ms is conservative for 9600 baud (worst-case frame ~30ms) + margin.
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 500;
 
-/// Default inter-frame delay — used by [`RtuTimings::default()`].
+/// Default inter-frame delay, used by [`RtuTimings::default()`].
 /// 10ms = 3.5 char-times at 9600 baud (~4ms) + margin for RS-485 noise.
 const DEFAULT_INTER_FRAME_DELAY_MS: u64 = 10;
 
@@ -102,7 +102,7 @@ impl Default for RtuTimings {
 /// on one bus (e.g. PLC slave=1 + chiller slave=2), create two handles from the
 /// same actor via [`ActorHandle::with_slave_id`].
 ///
-/// Drop all clones → channel closes → the actor task exits gracefully.
+/// When all clones are dropped the channel closes and the actor task exits.
 #[derive(Clone, Debug)]
 pub struct ActorHandle {
     tx: mpsc::Sender<Request>,
@@ -112,7 +112,7 @@ pub struct ActorHandle {
 
 impl ActorHandle {
     /// Create a new handle to the same actor but with a different slave ID.
-    /// Cheap — just cloning the sender + changing the ID. Used for multi-slave
+    /// Cheap: only clones the sender and changes the ID. Used for multi-slave
     /// on one RS-485 bus (e.g. a PLC handle + a chiller handle from 1 actor).
     pub fn with_slave_id(&self, slave_id: u8) -> Self {
         Self {
@@ -124,7 +124,7 @@ impl ActorHandle {
     /// True if two handles point to the same actor task (the same channel
     /// sender). Used by the `SerialActorCache` test to verify that two lookups
     /// to the same port return handles to the identical actor. `with_slave_id`
-    /// is still "same channel" — cloned sender, different slave_id.
+    /// is still "same channel": cloned sender, different slave_id.
     #[cfg(test)]
     pub(crate) fn same_channel(&self, other: &Self) -> bool {
         self.tx.same_channel(&other.tx)
@@ -137,11 +137,11 @@ impl ActorHandle {
 /// the connection is up.
 ///
 /// Returns `Result` for call-site ergonomics, but currently never fails: every
-/// transport is supported and network errors don't surface here — the actor
+/// transport is supported and network errors don't surface here. The actor
 /// handles connect/reconnect internally.
 pub async fn spawn(transport: Transport, unit_id: u8, timings: RtuTimings) -> Result<ActorHandle> {
     // The real connect happens inside the actor loop (for automatic
-    // retry-on-fail); nothing to validate up front — all transports are handled.
+    // retry-on-fail); nothing to validate up front, all transports are handled.
     let (tx, rx) = mpsc::channel(INBOX_CAP);
     tokio::spawn(run_actor(transport, timings, rx));
     Ok(ActorHandle {
@@ -151,7 +151,7 @@ pub async fn spawn(transport: Transport, unit_id: u8, timings: RtuTimings) -> Re
 }
 
 // ===========================================================================
-// Trait impls — forward to the channel
+// Trait impls: forward to the channel
 // ===========================================================================
 
 #[async_trait]
@@ -214,9 +214,9 @@ impl WriteConn for ActorHandle {
 
 impl ActorHandle {
     /// Send an op, await the reply. Error variants:
-    /// - Actor task dead → "modbus actor task is gone" (channel closed).
-    /// - Reply dropped before answering → the actor probably crashed mid-request.
-    /// - Modbus error or timeout → forwarded from the actor.
+    /// - Actor task dead: "modbus actor task is gone" (channel closed).
+    /// - Reply dropped before answering: the actor probably crashed mid-request.
+    /// - Modbus error or timeout: forwarded from the actor.
     async fn dispatch(&self, op: Op) -> Result<Reply> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
@@ -269,7 +269,7 @@ enum Op {
         value: bool,
     },
     /// Write 2+ consecutive holding registers. Used for set_* writes
-    /// (float→2 reg f32, integer→2 reg i32) that span 2 registers.
+    /// (float as 2-reg f32, integer as 2-reg i32) that span 2 registers.
     WriteMultipleRegisters {
         address: u16,
         values: Vec<u16>,
@@ -310,7 +310,7 @@ impl Reply {
 /// Connect + process request sequential, reconnect on error/timeout.
 /// Exits when the channel closes (all handles dropped).
 ///
-/// `unit_id` is not used as a fixed slave — each request carries its own
+/// `unit_id` is not used as a fixed slave. Each request carries its own
 /// `slave_id`. The actor switches slave via `ctx.set_slave()` before each
 /// request whose slave ID differs from the previous one.
 async fn run_actor(transport: Transport, timings: RtuTimings, mut rx: mpsc::Receiver<Request>) {
@@ -341,7 +341,7 @@ async fn run_actor(transport: Transport, timings: RtuTimings, mut rx: mpsc::Rece
         };
 
         // Slave ID from the previous request. `None` = no request yet.
-        // Used to detect a slave switch → inter-frame delay.
+        // Used to detect a slave switch, which needs an inter-frame delay.
         let mut last_slave_id: Option<u8> = None;
 
         // Inner loop: one connection lifecycle. Break to the outer loop on error.
@@ -352,7 +352,7 @@ async fn run_actor(transport: Transport, timings: RtuTimings, mut rx: mpsc::Rece
             };
 
             // Switch slave if different from the previous request.
-            // Inter-frame delay only on a slave change — consecutive same-slave
+            // Inter-frame delay only on a slave change. Consecutive same-slave
             // requests need no delay (no silent interval between frames to the
             // same slave as long as the master initiates).
             if last_slave_id != Some(req.slave_id) {
@@ -395,11 +395,11 @@ async fn run_actor(transport: Transport, timings: RtuTimings, mut rx: mpsc::Rece
 }
 
 /// Fail-fast every request already queued when the link goes down. Without this,
-/// the caller would await a reply that won't arrive until reconnect — bad for
+/// the caller would await a reply that won't arrive until reconnect, which is bad for
 /// telemetry that ticks on a tight interval.
 ///
 /// Best-effort: drain everything ready *now* (try_recv loop) then return. Does
-/// not block — messages that arrive after this are handled on the next
+/// not block. Messages that arrive after this are handled on the next
 /// iteration or rejected when reconnect fails again.
 async fn drain_with_error(rx: &mut mpsc::Receiver<Request>, msg: &str) {
     while let Ok(req) = rx.try_recv() {
@@ -490,7 +490,7 @@ async fn process(ctx: &mut ModbusContext, op: Op) -> Result<Reply> {
 // ===========================================================================
 
 /// Open the physical connection to the transport. The initial slave is not set
-/// here — the actor will `set_slave()` before each request per `req.slave_id`.
+/// here. The actor calls `set_slave()` before each request per `req.slave_id`.
 /// A dummy slave 0xFF is used for `attach_slave` (the "broadcast" convention,
 /// never used for an actual request).
 async fn connect(transport: &Transport) -> Result<ModbusContext> {
@@ -523,7 +523,7 @@ async fn connect(transport: &Transport) -> Result<ModbusContext> {
             // Give the USB-serial driver (FTDI, CH340, CP2102, etc.) time to
             // finish initializing before the first frame is sent. Without this
             // delay, the first write() can return EINPROGRESS (os error 115)
-            // because the driver isn't ready yet — especially on a Raspberry Pi
+            // because the driver isn't ready yet, especially on a Raspberry Pi
             // with a USB adapter.
             tokio::time::sleep(Duration::from_millis(200)).await;
             Ok(rtu::attach_slave(stream, DUMMY_SLAVE))
@@ -565,7 +565,7 @@ fn map_data_bits(d: SerialDataBits) -> tokio_serial::DataBits {
 }
 
 // ===========================================================================
-// Tests — pure orchestration. Does not touch actual Modbus I/O.
+// Tests: pure orchestration. Does not touch actual Modbus I/O.
 // ===========================================================================
 
 #[cfg(test)]
@@ -583,7 +583,7 @@ mod tests {
         };
         let res = spawn(t, 1, RtuTimings::default()).await;
         assert!(res.is_ok(), "spawn must accept Tcp transport");
-        // Drop the handle → channel closes → the background actor exits.
+        // Dropping the handle closes the channel, so the background actor exits.
     }
 
     /// Reply type assertion: if the actor reply variant mismatches (a bug in
@@ -621,10 +621,10 @@ mod tests {
     /// no-op requests.
     #[tokio::test]
     async fn read_zero_count_short_circuits_without_actor() {
-        let (tx, _rx) = mpsc::channel(1); // _rx drop — channel closed
+        let (tx, _rx) = mpsc::channel(1); // _rx dropped, channel closed
         let mut h = ActorHandle { tx, slave_id: 1 };
 
-        // count=0 → must return Ok(vec![]) without hitting the channel.
+        // count=0 must return Ok(vec![]) without hitting the channel.
         let holdings = h
             .read_holdings(0)
             .await
@@ -638,7 +638,7 @@ mod tests {
         assert!(coils.is_empty());
     }
 
-    /// Channel closed (actor task exited) → dispatch returns an error, not a
+    /// Channel closed (actor task exited): dispatch returns an error, not a
     /// hang. Important for graceful shutdown.
     #[tokio::test]
     async fn dispatch_errors_when_actor_gone() {

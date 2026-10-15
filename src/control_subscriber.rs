@@ -1,4 +1,4 @@
-//! Control + Set subscriber: receive an MQTT publish → write Modbus to the PLC
+//! Control + Set subscriber: receive an MQTT publish, then write Modbus to the PLC
 //! or a source device.
 //!
 //! ## Strategy (mixed-mode write, multi-device)
@@ -6,20 +6,20 @@
 //! - Scope: `write_single_coil`/`write_single_register` (gate-protected) AND
 //!   `write_multiple_registers` (no gate) from every device in the mapping.
 //! - Topic patterns subscribed (per ConnAck):
-//!   - `{base}/{machine}/control/#`                        ← primary PLC control
-//!   - `{base}/{machine}/set/#`                            ← primary PLC set
-//!   - `{base}/{device.location}/{device.name}/control/#`  ← per device (additional PLC + slave)
-//!   - `{base}/{device.location}/{device.name}/set/#`      ← per device
+//!   - `{base}/{machine}/control/#`: primary PLC control
+//!   - `{base}/{machine}/set/#`: primary PLC set
+//!   - `{base}/{device.location}/{device.name}/control/#`: per device (additional PLC + slave)
+//!   - `{base}/{device.location}/{device.name}/set/#`: per device
 //! - Write semantics (determined directly from the `kind` binding):
-//!   - `write_single_register` → FC6, write 1 register with an on/off value.
-//!   - `write_single_coil` → FC5, write 1 boolean bit.
-//!   - `write_multiple_registers` + Float → FC16, encode f32 → 2 registers.
-//!   - `write_multiple_registers` + Integer → FC16, encode i32 → 2 registers.
-//! - **Control gate**: `write_single_coil` and `write_single_register` must go
-//!   through the gate. Check `HGETALL control` in Valkey — the AND of two flags
+//!   - `write_single_register`: FC6, write 1 register with an on/off value.
+//!   - `write_single_coil`: FC5, write 1 boolean bit.
+//!   - `write_multiple_registers` + Float: FC16, encode f32 into 2 registers.
+//!   - `write_multiple_registers` + Integer: FC16, encode i32 into 2 registers.
+//! - Control gate: `write_single_coil` and `write_single_register` must go
+//!   through the gate. Check `HGETALL control` in Valkey: the AND of two flags
 //!   (`global` + per-machine). `write_multiple_registers` (set/setpoint) bypasses
-//!   the gate — it's a data write, not an actuator.
-//! - **Multi-device writer** (keyed by `device_id`):
+//!   the gate because it is a data write, not an actuator.
+//! - Multi-device writer (keyed by `device_id`):
 //!   - Primary PLC: writer factory from main.rs (connection from the first PLC
 //!     in the mapping).
 //!   - Additional PLC: writer factory from each one's connection block,
@@ -30,12 +30,12 @@
 //!     unit_id but different ports are dispatched to the correct connection.
 //!   - Lazy connect on demand, drop + reconnect on error.
 //! - Error handling:
-//!   - Modbus connect failed → log + skip message, reconnect on the next message
-//!   - Modbus write failed → log + drop this device_id's writer, reconnect next
-//!   - Unknown topic → log debug, skip
-//!   - Invalid payload → log warn, skip
-//!   - Gate deny → log info, skip (by design)
-//!   - Channel closed → exit loop
+//!   - Modbus connect failed: log + skip message, reconnect on the next message
+//!   - Modbus write failed: log + drop this device_id's writer, reconnect next
+//!   - Unknown topic: log debug, skip
+//!   - Invalid payload: log warn, skip
+//!   - Gate deny: log info, skip
+//!   - Channel closed: exit loop
 
 use crate::shared::{ByteOrder, DataType, DeviceMapping, ModbusBinding, TopicIndex};
 use anyhow::{Context as _, Result, anyhow};
@@ -57,8 +57,8 @@ const CONNECT_SETTLE: Duration = Duration::from_millis(300);
 /// The write action chosen from the binding + category. 4 variants:
 /// - `Register`: control on/off devices (CONTROL grid). Write a boolean u16 value.
 /// - `Coil`: momentary control (hydraulic up/down). Write bool.
-/// - `SetFloat`: set_* float (setpoint). Parse f32 → encode 2 registers.
-/// - `SetInteger`: set_* integer (setpoint). Parse i64 → cast i32 → encode 2 registers.
+/// - `SetFloat`: set_* float (setpoint). Parse f32, encode into 2 registers.
+/// - `SetInteger`: set_* integer (setpoint). Parse i64, cast to i32, encode into 2 registers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteAction {
     /// Write a single holding register with a value based on the boolean payload.
@@ -67,12 +67,12 @@ pub enum WriteAction {
         on_value: u16,
         off_value: u16,
     },
-    /// Write a single coil. `true` payload → coil ON, `false` → coil OFF.
+    /// Write a single coil. `true` payload sets the coil ON, `false` sets it OFF.
     Coil { address: u16 },
-    /// Set float: parse the payload as f32, encode via byte_order → 2 registers.
+    /// Set float: parse the payload as f32, encode via byte_order into 2 registers.
     SetFloat { address: u16, byte_order: ByteOrder },
     /// Set integer: parse the payload i64, cast i32, bit-cast u32, encode via
-    /// byte_order → 2 registers.
+    /// byte_order into 2 registers.
     SetInteger { address: u16, byte_order: ByteOrder },
 }
 
@@ -84,7 +84,7 @@ pub struct ControlEntry {
     pub key: String,
     /// The write action chosen per binding + data type.
     pub action: WriteAction,
-    /// Target device ID — the key for looking up the writer factory and writer
+    /// Target device ID, the key for looking up the writer factory and writer
     /// cache. Primary PLC = the device_id of the first PLC in the mapping;
     /// slave/additional PLC = its own device_id. Uses device_id (not unit_id) so
     /// two PLCs on different ports but with the same unit_id are dispatched to
@@ -92,7 +92,7 @@ pub struct ControlEntry {
     pub device_id: String,
     /// True if dispatch must go through the control_gate (= write_single_coil /
     /// write_single_register). False for write_multiple_registers (set/setpoint)
-    /// — no gate by design.
+    /// (no gate).
     pub requires_gate: bool,
     /// Gate field in the Valkey hash for the target device: `{base_topic}/{location}/{name}`.
     /// Stored per entry because each PLC/slave in the mapping is granted on its own.
@@ -104,7 +104,7 @@ pub struct ControlEntry {
 #[derive(Clone)]
 pub struct ControlSubscriberConfig {
     /// List of MQTT subscribe patterns. Subscribe to all of these after each
-    /// ConnAck. MQTT wildcards `+`/`#` — matched pattern level-by-level.
+    /// ConnAck. MQTT wildcards `+`/`#` are matched level by level.
     pub subscribe_patterns: Vec<String>,
     /// Writer factory per device_id. The primary PLC is always present;
     /// additional PLCs and slaves are built from each one's connection block.
@@ -139,12 +139,12 @@ impl ControlSubscriberConfig {
                 continue;
             }
             if device.device_type == DeviceType::Master && !primary_plc_registered {
-                // Primary PLC — use the pre-built factory from main.rs
+                // Primary PLC: use the pre-built factory from main.rs
                 writer_factories.insert(device.device_id.clone(), plc_writer_factory.clone());
                 primary_plc_registered = true;
                 continue;
             }
-            // Additional PLC or slave — build the factory from the connection block.
+            // Additional PLC or slave: build the factory from the connection block.
             let factory =
                 crate::modbus_client::build_source_writer(&device.connection, actor_cache)
                     .await
@@ -173,14 +173,14 @@ impl ControlSubscriberConfig {
 /// location+name.
 ///
 /// Pure function (`base` + `machine` + `mapping`, not `&Settings`) so it can be
-/// unit-tested without env — like [`build_entries_map`].
+/// unit-tested without env, like [`build_entries_map`].
 fn build_subscribe_patterns(base: &str, machine: &str, mapping: &DeviceMapping) -> Vec<String> {
     let mut patterns = vec![
         format!("{base}/{machine}/control/#"),
         format!("{base}/{machine}/set/#"),
     ];
     // The primary PLC (first Master = machine_id) is already covered by the
-    // machine patterns above. Every other device — additional PLCs and slaves —
+    // machine patterns above. Every other device (additional PLCs and slaves)
     // has its own location/name and needs its own patterns. Skip only the first
     // Master; consistent with `primary_plc_registered` in `from_settings`.
     let mut primary_plc_skipped = false;
@@ -200,14 +200,14 @@ fn build_subscribe_patterns(base: &str, machine: &str, mapping: &DeviceMapping) 
 }
 
 /// Build the per-topic dispatch map from the TopicIndex. A pure function for
-/// testability — no Settings/env needed.
+/// testability, no Settings/env needed.
 ///
 /// Dispatch is determined directly from the `kind` binding (strict FC):
-/// - `write_single_coil`        → `WriteAction::Coil`, requires_gate=true (FC5)
-/// - `write_single_register`    → `WriteAction::Register`, requires_gate=true (FC6)
-/// - `write_multiple_registers` + Float   → `WriteAction::SetFloat`, requires_gate=false (FC16)
-/// - `write_multiple_registers` + Integer → `WriteAction::SetInteger`, requires_gate=false (FC16)
-/// - Read variants + null modbus → skip (monitoring is handled by telemetry.rs)
+/// - `write_single_coil`: `WriteAction::Coil`, requires_gate=true (FC5)
+/// - `write_single_register`: `WriteAction::Register`, requires_gate=true (FC6)
+/// - `write_multiple_registers` + Float: `WriteAction::SetFloat`, requires_gate=false (FC16)
+/// - `write_multiple_registers` + Integer: `WriteAction::SetInteger`, requires_gate=false (FC16)
+/// - Read variants and null modbus: skipped (monitoring is handled by telemetry.rs)
 ///
 /// Routing to the writer factory uses `device_id` (not unit_id) so two PLCs on
 /// different ports but with the same unit_id get the correct connection.
@@ -343,7 +343,7 @@ fn parse_integer_payload(payload: &[u8]) -> Result<i64> {
 /// the writer exists (lazy connect), dispatch.
 ///
 /// Returns `Ok` if handled (write succeeded, skipped with a log, or gate deny).
-/// Returns `Err` if the Modbus write failed — the caller drops the writer for
+/// Returns `Err` if the Modbus write failed. The caller drops the writer for
 /// this device_id so it reconnects on the next message.
 async fn handle_publish(
     p: &Publish,
@@ -405,7 +405,7 @@ async fn handle_publish(
 
     let dispatch_result = dispatch_action(entry, &p.payload, writer).await;
     if dispatch_result.is_err() {
-        // Drop the writer — other devices are unaffected (independent per device_id).
+        // Drop the writer. Other devices are unaffected (independent per device_id).
         writers.remove(&entry.device_id);
         last_write_fail.insert(entry.device_id.clone(), Instant::now());
     }
@@ -416,8 +416,8 @@ async fn handle_publish(
 /// verified the entry exists + done the gate check.
 ///
 /// Return semantics (important for the writer lifecycle in the caller):
-/// - `Ok(())` → write succeeded OR payload invalid (writer still valid, skip message).
-/// - `Err`    → Modbus write failed → the caller must drop the writer to reconnect.
+/// - `Ok(())`: write succeeded OR payload invalid (writer still valid, skip message).
+/// - `Err`: Modbus write failed, so the caller must drop the writer to reconnect.
 ///
 /// A parse error is NOT propagated as `Err`: a corrupt payload is not a Modbus
 /// connection error. Propagating a parse error would drop the writer and
@@ -527,8 +527,8 @@ async fn dispatch_action(
                     return Ok(());
                 }
             };
-            // i64 → i32 truncate (set values fit in i32 for all params today;
-            // out-of-range = caller error). Bit-cast i32 → u32 preserves two's
+            // i64 to i32 truncate (set values fit in i32 for all params today;
+            // out-of-range = caller error). Bit-cast i32 to u32 preserves two's
             // complement so negative values decode correctly on the PLC. Cast
             // `as u32` here is equivalent to `u32::from_ne_bytes(v32.to_ne_bytes())`.
             let v32 = value as i32;
@@ -555,15 +555,15 @@ async fn dispatch_action(
     Ok(())
 }
 
-/// Main control + set subscriber loop. Loops: select between ConnAck →
-/// subscribe all patterns + inbox → dispatch to the appropriate writer.
+/// Main control + set subscriber loop. Selects between ConnAck (then
+/// subscribe all patterns) and the inbox (then dispatch to the matching writer).
 ///
 /// Writers are cached per device_id. Lazy connect on the first message for that
-/// device. Dropped on a write error → reconnect on the next message.
+/// device. Dropped on a write error and reconnected on the next message.
 ///
 /// `connack_rx`: a signal channel from `mqtt::drive_eventloop` on every ConnAck
 /// (initial connect + every reconnect). rumqttc defaults to
-/// `clean_session=true` — the broker drops subscriptions when the client
+/// `clean_session=true`: the broker drops subscriptions when the client
 /// disconnects, so we must re-subscribe after reconnect. Subscribing is also
 /// triggered by the first ConnAck (no separate initial subscribe needed).
 ///
@@ -585,7 +585,7 @@ pub async fn run(
     );
 
     // Writer cache per device_id. Lazy connect on the first message for that
-    // device. Dropped on error → next message reconnects.
+    // device. Dropped on error; the next message reconnects.
     let mut writers: HashMap<String, Box<dyn WriteConn>> = HashMap::new();
     // Last write-failure time per device_id, for the settle delay before reconnect.
     let mut last_write_fail: HashMap<String, Instant> = HashMap::new();
@@ -593,7 +593,7 @@ pub async fn run(
     loop {
         tokio::select! {
             // biased: prioritize ConnAck so if re-subscribe and dispatch are
-            // both ready, subscribe first — minimizing the window in which a
+            // both ready, subscribe first. This shortens the window in which a
             // control command could be missed after a reconnect.
             biased;
             connack = connack_rx.recv() => {
@@ -626,7 +626,7 @@ pub async fn run(
                                 topic = %p.topic,
                                 "control dispatch failed: {e:#} (device writer dropped, will reconnect)"
                             );
-                            // No explicit backoff here — the next message
+                            // No explicit backoff here. The next message
                             // targeting the same device_id reconnects via the
                             // lazy path in handle_publish. If Modbus stays down,
                             // the lazy connect keeps failing but doesn't block
@@ -645,7 +645,7 @@ pub async fn run(
 }
 
 // ===========================================================================
-// Tests — pure functions only (parse + filter + factory wiring).
+// Tests: pure functions only (parse + filter + factory wiring).
 // Loop manual-smoke.
 // ===========================================================================
 
@@ -655,12 +655,12 @@ mod tests {
 
     fn test_mapping_json() -> &'static str {
         // Multi-device subset (devices array):
-        // - control_lamp: holding+on/off=1/3 (on/off device)        → Register
-        // - control_valve_up: coil at addr 4 (momentary)          → Coil
-        // - control_pump: no binding                              → skipped
-        // - set_speed: holding float (data-only binding)         → SetFloat
-        // - set_time: holding integer                            → SetInteger
-        // - chiller slave: monitoring + set + control               → 2 writable
+        // - control_lamp: holding+on/off=1/3 (on/off device): Register
+        // - control_valve_up: coil at addr 4 (momentary): Coil
+        // - control_pump: no binding: skipped
+        // - set_speed: holding float (data-only binding): SetFloat
+        // - set_time: holding integer: SetInteger
+        // - chiller slave: monitoring + set + control: 2 writable
         r#"{
             "base_topic": "acme/site",
             "poll_interval_ms": 1000,
@@ -793,7 +793,7 @@ mod tests {
 
     #[test]
     fn parse_integer_rejects_float() {
-        // Strict: an integer payload does not accept "3.0" — the publisher is
+        // Strict: an integer payload does not accept "3.0". The publisher is
         // expected to have typed-cast before publishing, so the payload is always
         // an integer literal.
         assert!(parse_integer_payload(b"3.0").is_err());
@@ -905,8 +905,8 @@ mod tests {
         assert!(!entries.contains_key("acme/site/area1/chiller/temp/out"));
     }
 
-    /// Defensive: a control_* with `kind: read_holding_registers` is skipped —
-    /// that's a read-only / set_* placeholder, not a write target. Without an
+    /// Defensive: a control_* with `kind: read_holding_registers` is skipped.
+    /// That is a read-only / set_* placeholder, not a write target. Without an
     /// `on_value`, dispatch wouldn't know what value to write for payload=true.
     #[test]
     fn entries_excludes_read_binding_in_control_section() {
@@ -933,7 +933,7 @@ mod tests {
         );
     }
 
-    /// `off_value` absent di JSON → default 0 di ControlEntry (safe release).
+    /// `off_value` absent in JSON defaults to 0 in ControlEntry (safe release).
     #[test]
     fn entries_default_off_value_to_zero_when_absent() {
         use crate::shared::DeviceMapping;
@@ -970,7 +970,7 @@ mod tests {
     // ---------- subscribe pattern building ----------
 
     /// The subscribe pattern list covers the PLC (control + set) + 1 pattern per
-    /// source (control + set). Sources have their own location+name → the
+    /// source (control + set). Sources have their own location+name, so the
     /// pattern is not nested under the machine.
     #[test]
     fn subscribe_patterns_cover_plc_and_each_source() {
@@ -1041,7 +1041,7 @@ mod tests {
         // Primary (machine_a) via machine patterns.
         assert!(patterns.contains(&"acme/site/area1/machine_a/control/#".to_string()));
         assert!(patterns.contains(&"acme/site/area1/machine_a/set/#".to_string()));
-        // Second PLC (machine_b) — the bug: this was missing.
+        // Second PLC (machine_b). This was missing before the fix.
         assert!(
             patterns.contains(&"acme/site/area2/machine_b/control/#".to_string()),
             "second PLC control topic must be subscribed"

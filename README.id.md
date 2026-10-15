@@ -1,12 +1,12 @@
 # edge
 
-Edge agent Rust untuk gateway IoT industri. Agent ini melakukan polling **Modbus**
-(TCP / RTU) dari PLC dan membaca **timbangan serial-ASCII**, lalu mem-publish tiap
-parameter ke **MQTT** — satu topic per nilai. Semua konfigurasi mesin (ID, koneksi,
-register, interval polling) berada di satu file JSON mapping; tidak ada kompilasi
-ulang per mesin.
+Edge agent Rust untuk gateway IoT industri. Agent ini melakukan polling Modbus
+(TCP / RTU) dari PLC dan membaca timbangan serial-ASCII, lalu mem-publish tiap
+parameter ke MQTT, satu topic per nilai. Semua konfigurasi mesin (ID, koneksi,
+register, interval polling) berada di satu file JSON mapping, jadi mesin baru
+tidak perlu build ulang.
 
-Dirancang untuk berjalan di board Linux ARM/x86 kecil (Raspberry Pi dan sejenisnya)
+Agent ini berjalan di board Linux ARM/x86 kecil (Raspberry Pi dan sejenisnya)
 sebagai service systemd yang hidup terus-menerus.
 
 > 🇬🇧 English: [README.md](README.md)
@@ -32,17 +32,18 @@ sebagai service systemd yang hidup terus-menerus.
 
 ## Struktur
 
-Satu package `edge-client` (source di [`src/`](src/)):
+Satu package `edge-client`:
 
-| Path                           | Isinya                                                                        |
-| ------------------------------ | ----------------------------------------------------------------------------- |
-| [`src/`](src/)                 | Agent-nya: polling Modbus + baca weigher → publish MQTT, control gate, health |
-| [`src/shared/`](src/shared/)   | Domain type mapping/Modbus (skema JSON mapping + semantik register)           |
-| [`src/scale.rs`](src/scale.rs) | Subcommand `edge-client scale` — diagnosa output serial timbangan mentah      |
+- [`src/`](src/): agent-nya. Polling Modbus dan baca weigher, publish MQTT,
+  control gate, heartbeat dan laporan resource.
+- [`src/shared/`](src/shared/): domain type mapping dan Modbus (skema JSON
+  mapping, semantik register).
+- [`src/scale.rs`](src/scale.rs): subcommand `edge-client scale`, untuk
+  menampilkan output serial timbangan mentah.
 
-Satu instance `edge-client` menjalankan **satu mesin** (meski mesin itu bisa
-mencakup PLC utama plus beberapa slave Modbus dan weigher di board yang sama).
-Agent tidak melakukan persistence — semuanya di-publish ke MQTT dan dikonsumsi di
+Satu instance `edge-client` menjalankan satu mesin. Mesin itu bisa punya PLC
+utama plus beberapa slave Modbus dan weigher di board yang sama. Agent tidak
+menyimpan apa pun secara lokal: semuanya di-publish ke MQTT dan dikonsumsi di
 tempat lain.
 
 Secara internal, agent men-spawn task konkuren via `tokio::select!`: driver event
@@ -116,11 +117,9 @@ ada, dipakai `slave` pertama, lalu `weigher` pertama.
 Tiap entry di `devices[]` punya `device_type`, `device_id` yang stabil (dipakai
 untuk routing dan referensi bridge), `location`, `name`, dan `connection`.
 
-| `device_type` | Peran                                                               |
-| ------------- | ------------------------------------------------------------------- |
-| `master`      | PLC utama — menentukan machine id dan transport Modbus utama        |
-| `slave`       | Device Modbus tambahan (chiller RS-485, panel sensor, PLC kedua, …) |
-| `weigher`     | Timbangan serial-ASCII (tanpa Modbus)                               |
+- `master`: PLC utama. Menentukan machine id dan transport Modbus utama.
+- `slave`: device Modbus tambahan (chiller RS-485, panel sensor, PLC kedua).
+- `weigher`: timbangan serial-ASCII, tanpa Modbus.
 
 Jenis koneksi (`connection.type`):
 
@@ -147,9 +146,11 @@ transport di kode, tapi belum bisa dipilih dari mapping.
 
 Tiap device mendeklarasikan parameter di tiga array:
 
-- **`monitoring[]`** — dibaca dan di-publish sebagai telemetry.
-- **`set[]`** — setpoint writable (float/integer), ditulis saat publish MQTT. **Tanpa** gate.
-- **`control[]`** — on/off aktuator (register atau coil), ditulis saat publish MQTT. **Dilindungi gate.**
+- `monitoring[]`: dibaca dan di-publish sebagai telemetry.
+- `set[]`: setpoint writable (float/integer), ditulis saat publish MQTT. Tidak
+  dicek control gate.
+- `control[]`: on/off aktuator (register atau coil), ditulis saat publish MQTT.
+  Dicek control gate.
 
 Satu parameter berbentuk:
 
@@ -161,7 +162,7 @@ Satu parameter berbentuk:
   "type": "float", // float | integer | boolean | string
   "unit": "C", // opsional
   "modbus": {
-    /* binding — lihat bawah; kosongkan untuk param weigher */
+    /* binding, lihat bawah; kosongkan untuk param weigher */
   },
 }
 ```
@@ -171,7 +172,7 @@ capture-group weigher).
 
 ### Binding Modbus
 
-`modbus.kind` memetakan langsung ke Modbus function code — tanpa inferensi:
+`modbus.kind` memetakan langsung ke Modbus function code:
 
 | `kind`                     | FC   | Kegunaan                                              |
 | -------------------------- | ---- | ----------------------------------------------------- |
@@ -213,7 +214,7 @@ Nilai 32-bit menempati dua register 16-bit; vendor berbeda dalam urutan packing:
 
 | `byte_order`    | Byte | Word | Vendor umum                         |
 | --------------- | ---- | ---- | ----------------------------------- |
-| `big_big`       | BE   | BE   | "network order" — Schneider, ABB    |
+| `big_big`       | BE   | BE   | Schneider, ABB ("network order")    |
 | `little_big`    | LE   | BE   | Siemens S7                          |
 | `big_little`    | BE   | LE   | Schneider Quantum, sebagian Modicon |
 | `little_little` | LE   | LE   | sebagian Mitsubishi / generik       |
@@ -224,7 +225,7 @@ tukar urutan byte dan/atau word.
 ### Parser weigher & command
 
 Device `weigher` membaca baris ASCII dari serial dan mem-parse-nya dengan regex
-memakai **named capture group**; tiap nama group harus cocok dengan `key`
+memakai named capture group. Tiap nama group harus cocok dengan `key`
 `monitoring`.
 
 ```jsonc
@@ -237,14 +238,14 @@ memakai **named capture group**; tiap nama group harus cocok dengan `key`
 }
 ```
 
-- `byte_map` memetakan ulang byte mentah sebelum decode ASCII — untuk brand yang
+- `byte_map` memetakan ulang byte mentah sebelum decode ASCII, untuk brand yang
   meng-encode digit sebagai byte non-standard (mis. GSC memakai `0xB0`–`0xB9`
   untuk `'0'`–`'9'`). Kosongkan untuk brand ASCII standar (mis. Fujitsu).
 - `raw_topic`, jika diisi, mem-publish `{"weight": 12.50, "unit": "kg"}` ke
   `{base}/{location}/{name}/{raw_topic}` di samping topic per-key.
 - `stable` menggerbangi publish berdasarkan flag stabil/motion timbangan: tambah
-  capture group untuk token status (mis. `(?P<st>ST|US)`) lalu set `group`/`equals`
-  — hanya baris yang token-nya sama dengan `equals` yang di-publish, sehingga
+  capture group untuk token status (mis. `(?P<st>ST|US)`) lalu set `group`/`equals`.
+  Hanya baris yang token-nya sama dengan `equals` yang di-publish, sehingga
   pembacaan saat bergerak dibuang. Hilangkan untuk mem-publish setiap baris.
 - `read_timeout_ms` adalah watchdog idle: jika port tetap terbuka tapi tidak
   mengirim apa pun selama ini, koneksi di-reopen (menangkap port yang terbuka
@@ -418,9 +419,9 @@ Semua topic diawali `{base_topic}/{location}/{name}` (machine id):
 | `.../heartbeat`     | publish   | `{"status":"connected"}` tiap 1s (retained)     |
 | `.../resources`     | publish   | `{"memory_pct","cpu_pct","ip"}` tiap 1s         |
 | `.../plc/status`    | publish   | `{"status":"connected"\|"disconnected"}`        |
-| `.../control/{key}` | subscribe | `"1"`/`"0"`/`"true"`/`"false"` → write aktuator |
-| `.../set/{key}`     | subscribe | String numerik → write setpoint                 |
-| `.../cmd/{key}`     | subscribe | Payload apa pun → kirim `serial_cmd` weigher    |
+| `.../control/{key}` | subscribe | `"1"`/`"0"`/`"true"`/`"false"`, write aktuator  |
+| `.../set/{key}`     | subscribe | String numerik, write setpoint                  |
+| `.../cmd/{key}`     | subscribe | Payload apa pun, kirim `serial_cmd` weigher     |
 
 Last-Will-Testament broker mem-publish `{"status":"disconnected"}` (retained) ke
 topic heartbeat mesin primer kalau agent mati atau network putus. Setelah broker
@@ -431,7 +432,7 @@ reconnect, agent otomatis subscribe ulang (rumqttc pakai clean session).
 Write dari `control/{key}` (aktuator FC5/FC6) diotorisasi oleh hash Valkey/Redis
 sebelum tiap write. Write `set/{key}` dan bridge melewati gate.
 
-Write di-grant **hanya jika** flag global dan flag per-mesin sama-sama `"1"`:
+Write di-grant hanya jika flag global dan flag per-mesin sama-sama `"1"`:
 
 ```sh
 redis-cli HSET control global 1
@@ -439,7 +440,7 @@ redis-cli HSET control acme/site/area2/machine_c 1
 ```
 
 Kalau `CACHE_URL` kosong atau Valkey tidak terjangkau, **semua control di-deny**
-(fail-safe). Nama field per-mesin adalah `{base_topic}/{machine_id}` — identifier
+(fail-safe). Nama field per-mesin adalah `{base_topic}/{machine_id}`, identifier
 yang sama dengan prefix topic MQTT.
 
 ## Diagnosa timbangan (`scale`)

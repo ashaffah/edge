@@ -19,7 +19,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 #   tokio-modbus = async Modbus client. Features:
 #                    - `tcp`  = Modbus TCP (MBAP header)
 #                    - `rtu`  = RTU protocol codec (CRC framing). Does not
-#                               include a serial transport — bring your own
+#                               include a serial transport; bring your own
 #                               AsyncRead+AsyncWrite (TcpStream for
 #                               rtu-over-tcp, SerialStream for rtu_serial).
 #                    default-features=false drops the server impl + sync wrapper.
@@ -29,7 +29,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 #                  driver, so this covers all gateway hardware without a
 #                  separate mode.
 #   rumqttc      = pure-Rust MQTT client. Chosen over paho-mqtt because it has
-#                  no C library dependency — easy to cross-compile for
+#                  no C library dependency, which makes it easy to cross-compile for
 #                  ARM/embedded Linux. Features:
 #                    - default `use-rustls` = TLS via rustls (for mqtts/wss)
 #                    - `websocket` = enable Transport::Ws + Wss
@@ -53,13 +53,13 @@ local-ip-address = "0.6"
 #   redis = Redis/Valkey client for the authorization gate check. Features:
 #                   - `tokio-comp`         = AsyncCommands on the Tokio runtime
 #                   - `connection-manager` = auto-reconnect + retry handler
-#                 No TLS feature; edge ↔ Valkey is usually intra-VPC.
+#                 No TLS feature; edge to Valkey traffic is usually intra-VPC.
 redis = { version = "1.2", features = ["tokio-comp", "connection-manager"] }
 
 # Weigher serial ASCII: named-capture regex to parse scale output.
-# A new brand just needs a JSON update (different pattern) — no rebuild.
+# A new brand just needs a JSON update (different pattern), no rebuild.
 regex = "1"
 
 # CLI arg parsing. Used for the `scale` subcommand (serial scale diagnostic
-# tool) — the default agent mode runs when no subcommand is given.
+# tool). The default agent mode runs when no subcommand is given.
 clap = { version = "4", features = ["derive"] }

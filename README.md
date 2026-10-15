@@ -1,12 +1,12 @@
 # edge
 
-Rust edge agent for industrial IoT gateways. It polls **Modbus** (TCP / RTU) from
-PLCs and reads **serial-ASCII weighing scales**, then publishes each parameter to
-**MQTT** — one topic per value. Everything about a machine (IDs, connections,
-registers, poll interval) lives in a single JSON mapping file; there is no
-per-machine recompile.
+Rust edge agent for industrial IoT gateways. It polls Modbus (TCP / RTU) from
+PLCs and reads serial-ASCII weighing scales, then publishes each parameter to
+MQTT, one topic per value. Everything about a machine (IDs, connections,
+registers, poll interval) lives in a single JSON mapping file, so a new machine
+does not need a rebuild.
 
-Designed to run on small ARM/x86 Linux boards (Raspberry Pi and similar) as a
+It runs on small ARM/x86 Linux boards (Raspberry Pi and similar) as a
 long-lived systemd service.
 
 > 🇮🇩 Indonesia: [README.id.md](README.id.md)
@@ -32,17 +32,18 @@ long-lived systemd service.
 
 ## Layout
 
-Single package `edge-client` (source under [`src/`](src/)):
+Single package `edge-client`:
 
-| Path                           | What it is                                                                 |
-| ------------------------------ | -------------------------------------------------------------------------- |
-| [`src/`](src/)                 | The agent: Modbus poll + weigher read → MQTT publish, control gate, health |
-| [`src/shared/`](src/shared/)   | Mapping/Modbus domain types (JSON mapping schema + register semantics)     |
-| [`src/scale.rs`](src/scale.rs) | `edge-client scale` subcommand — diagnose raw scale serial output          |
+- [`src/`](src/): the agent. Modbus polling and weigher reading, MQTT publishing,
+  control gate, heartbeat and resource reporting.
+- [`src/shared/`](src/shared/): mapping and Modbus domain types (JSON mapping
+  schema, register semantics).
+- [`src/scale.rs`](src/scale.rs): the `edge-client scale` subcommand, which
+  prints raw scale serial output.
 
-One `edge-client` instance runs **one machine** (though that machine may span a
-primary PLC plus additional Modbus slaves and weighers on the same board). It
-does no persistence — everything is published to MQTT and consumed elsewhere.
+One `edge-client` instance runs one machine. That machine can have a primary PLC
+plus additional Modbus slaves and weighers on the same board. The agent stores
+nothing locally: everything is published to MQTT and consumed elsewhere.
 
 Internally the agent spawns concurrent tasks via `tokio::select!`: the MQTT
 event-loop driver, the heartbeat/resource/telemetry/PLC-status/weigher
@@ -115,11 +116,9 @@ is none, the first `slave` is used, then the first `weigher`.
 Each entry in `devices[]` has a `device_type`, a stable `device_id` (used for
 routing and bridge references), a `location`, a `name`, and a `connection`.
 
-| `device_type` | Role                                                                   |
-| ------------- | ---------------------------------------------------------------------- |
-| `master`      | Primary PLC — sets the machine id and the main Modbus transport        |
-| `slave`       | Additional Modbus device (RS-485 chiller, sensor panel, second PLC, …) |
-| `weigher`     | Serial-ASCII weighing scale (no Modbus)                                |
+- `master`: primary PLC. Sets the machine id and the main Modbus transport.
+- `slave`: additional Modbus device (RS-485 chiller, sensor panel, second PLC).
+- `weigher`: serial-ASCII weighing scale, no Modbus.
 
 Connection types (`connection.type`):
 
@@ -146,9 +145,11 @@ transport in the code but cannot be selected from the mapping yet.
 
 Each device declares parameters under three arrays:
 
-- **`monitoring[]`** — read and published as telemetry.
-- **`set[]`** — writable setpoints (float/integer), written on MQTT publish. **Not** gate-protected.
-- **`control[]`** — actuator on/off (register or coil), written on MQTT publish. **Gate-protected.**
+- `monitoring[]`: read and published as telemetry.
+- `set[]`: writable setpoints (float/integer), written on MQTT publish. Not
+  checked by the control gate.
+- `control[]`: actuator on/off (register or coil), written on MQTT publish.
+  Checked by the control gate.
 
 A parameter looks like:
 
@@ -160,7 +161,7 @@ A parameter looks like:
   "type": "float", // float | integer | boolean | string
   "unit": "C", // optional
   "modbus": {
-    /* binding — see below; omit for weigher params */
+    /* binding, see below; omit for weigher params */
   },
 }
 ```
@@ -170,7 +171,7 @@ capture-group values).
 
 ### Modbus bindings
 
-`modbus.kind` maps directly to a Modbus function code — no inference:
+`modbus.kind` maps directly to a Modbus function code:
 
 | `kind`                     | FC   | Use                                                   |
 | -------------------------- | ---- | ----------------------------------------------------- |
@@ -212,7 +213,7 @@ Examples:
 
 | `byte_order`    | Byte | Word | Typical vendor                   |
 | --------------- | ---- | ---- | -------------------------------- |
-| `big_big`       | BE   | BE   | "network order" — Schneider, ABB |
+| `big_big`       | BE   | BE   | Schneider, ABB ("network order") |
 | `little_big`    | LE   | BE   | Siemens S7                       |
 | `big_little`    | BE   | LE   | Schneider Quantum, some Modicon  |
 | `little_little` | LE   | LE   | some Mitsubishi / generic        |
@@ -223,7 +224,7 @@ byte and/or word order.
 ### Weigher parser & commands
 
 A `weigher` device reads ASCII lines from serial and parses them with a regex
-using **named capture groups**; each group name must match a `monitoring` `key`.
+using named capture groups. Each group name must match a `monitoring` `key`.
 
 ```jsonc
 "parser": {
@@ -235,14 +236,14 @@ using **named capture groups**; each group name must match a `monitoring` `key`.
 }
 ```
 
-- `byte_map` remaps raw bytes before ASCII decode — for brands that encode digits
+- `byte_map` remaps raw bytes before ASCII decode, for brands that encode digits
   as non-standard bytes (e.g. GSC uses `0xB0`–`0xB9` for `'0'`–`'9'`). Leave it
   empty for standard-ASCII brands (e.g. Fujitsu).
 - `raw_topic`, if set, publishes `{"weight": 12.50, "unit": "kg"}` to
   `{base}/{location}/{name}/{raw_topic}` alongside the per-key topics.
 - `stable` gates publishing on the scale's stable/motion flag: add a capture
-  group for the status token (e.g. `(?P<st>ST|US)`) and set `group`/`equals` —
-  only lines whose token equals `equals` are published, so in-motion readings are
+  group for the status token (e.g. `(?P<st>ST|US)`) and set `group`/`equals`.
+  Only lines whose token equals `equals` are published, so in-motion readings are
   dropped. Omit to publish every parsed line.
 - `read_timeout_ms` is an idle watchdog: if the port stays open but sends nothing
   for this long, the connection is reopened (catches a silent-but-open port).
@@ -418,9 +419,9 @@ All topics are prefixed `{base_topic}/{location}/{name}` (the machine id):
 | `.../heartbeat`     | publish   | `{"status":"connected"}` every 1s (retained)    |
 | `.../resources`     | publish   | `{"memory_pct","cpu_pct","ip"}` every 1s        |
 | `.../plc/status`    | publish   | `{"status":"connected"\|"disconnected"}`        |
-| `.../control/{key}` | subscribe | `"1"`/`"0"`/`"true"`/`"false"` → actuator write |
-| `.../set/{key}`     | subscribe | Numeric string → setpoint write                 |
-| `.../cmd/{key}`     | subscribe | Any payload → send the weigher `serial_cmd`     |
+| `.../control/{key}` | subscribe | `"1"`/`"0"`/`"true"`/`"false"`, actuator write  |
+| `.../set/{key}`     | subscribe | Numeric string, setpoint write                  |
+| `.../cmd/{key}`     | subscribe | Any payload, sends the weigher `serial_cmd`     |
 
 The broker Last-Will-Testament publishes `{"status":"disconnected"}` (retained)
 to the primary machine's heartbeat topic if the agent dies or the network drops.
@@ -432,7 +433,7 @@ clean session).
 Writes from `control/{key}` (FC5/FC6 actuators) are authorized by a Valkey/Redis
 hash before each write. `set/{key}` and bridge writes bypass the gate.
 
-A write is granted **only if** both the global flag and the per-machine flag are
+A write is granted only if both the global flag and the per-machine flag are
 `"1"`:
 
 ```sh
@@ -441,7 +442,7 @@ redis-cli HSET control acme/site/area2/machine_c 1
 ```
 
 If `CACHE_URL` is empty or Valkey is unreachable, **all control is denied**
-(fail-safe). The per-machine field name is `{base_topic}/{machine_id}` — the same
+(fail-safe). The per-machine field name is `{base_topic}/{machine_id}`, the same
 identifier as the MQTT topic prefix.
 
 ## Diagnosing a scale (`scale`)

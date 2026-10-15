@@ -1,6 +1,6 @@
 {
   "_notes": [
-    "Scenario: PLC-ONLY — one TCP PLC, no slaves or weighers.",
+    "Scenario: PLC-ONLY: one TCP PLC, no slaves or weighers.",
     "machine_id is derived from the first device_type='master': {location}/{name} = area3/machine_c.",
     "No 'slave' or 'weigher' entries are needed at all."
   ],

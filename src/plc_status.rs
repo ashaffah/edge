@@ -2,7 +2,7 @@
 //!
 //! Publishes `{base}/{machine}/plc/status` every second + immediately whenever
 //! the status changes. State is received from `telemetry::run` via a `watch`
-//! channel — telemetry is what knows when Modbus connects/disconnects.
+//! channel, because telemetry is what knows when Modbus connects/disconnects.
 //!
 //! Similar to the `heartbeat` pattern, but the payload is dynamic
 //! (connected/disconnected) rather than always "connected".
@@ -18,12 +18,12 @@ const INTERVAL: Duration = Duration::from_secs(1);
 const PAYLOAD_CONNECTED: &[u8] = br#"{"status":"connected"}"#;
 const PAYLOAD_DISCONNECTED: &[u8] = br#"{"status":"disconnected"}"#;
 
-/// Publisher loop. Never returns — embed it in a `tokio::select!` with a
+/// Publisher loop. Never returns; embed it in a `tokio::select!` with a
 /// shutdown signal.
 ///
 /// Publishing is triggered by two sources:
 /// - A 1-second ticker (periodic, guarantees status is sent even with no change)
-/// - `status_rx.changed()` — immediately when telemetry updates the state
+/// - `status_rx.changed()`: immediately when telemetry updates the state
 ///   (connect/disconnect)
 pub async fn run(
     client: AsyncClient,
@@ -32,7 +32,7 @@ pub async fn run(
     mut status_rx: watch::Receiver<bool>,
 ) {
     let mut ticker = tokio::time::interval(INTERVAL);
-    // Delay: if publishing is slow, don't burst catch-up — wait for the next
+    // Delay: if publishing is slow, don't burst catch-up; wait for the next
     // interval.
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
@@ -40,11 +40,11 @@ pub async fn run(
         tokio::select! {
             _ = ticker.tick() => {}
             // changed() returns Err if the sender is dropped (= telemetry exit),
-            // the arm doesn't match → the ticker keeps handling it — no need to
+            // the arm doesn't match and the ticker keeps handling it. No need to
             // panic.
             Ok(()) = status_rx.changed() => {}
         }
-        // Borrow + deref into a local bool immediately — the guard is dropped
+        // Borrow + deref into a local bool immediately. The guard is dropped
         // before the .await, so no RwLockReadGuard is held across the await
         // point.
         let connected = *status_rx.borrow();
@@ -89,7 +89,7 @@ mod tests {
     #[test]
     fn payload_matches_consumer_contract() {
         // Defense: contract test. The consumer expects `{ status: String }`.
-        // If the shape changes, this test fails first — not a runtime mystery
+        // If the shape changes, this test fails first instead of a runtime mystery
         // in production.
         #[derive(serde::Deserialize)]
         struct ConsumerContract {

@@ -1,15 +1,15 @@
-//! Redis/Valkey-backed control gate — an authorization check performed before
+//! Redis/Valkey-backed control gate: an authorization check performed before
 //! every Modbus write so operators can enable/disable control centrally.
 //!
 //! Exact semantics:
 //! - Before each Modbus write in [`crate::control_subscriber::dispatch`], call
 //!   [`ControlGate::is_granted`].
 //! - `HGETALL <hash_key>` (default `"control"`, override via the env var
-//!   `CONTROL_GATE_KEY`). Empty hash → **deny**.
-//! - Granted **iff** `map["global"] == "1"` **AND**
-//!   `map[<machine_field>] == "1"`. Strict string equality — only the literal
+//!   `CONTROL_GATE_KEY`). Empty hash means deny.
+//! - Granted only if `map["global"] == "1"` AND
+//!   `map[<machine_field>] == "1"`. Strict string equality: only the literal
 //!   `"1"` grants.
-//! - **Field name format**: `{base_topic}/{location}/{name}` of the target
+//! - Field name format: `{base_topic}/{location}/{name}` of the target
 //!   device, e.g. `acme/site/area1/machine_a`. Same as the MQTT topic prefix.
 //!   Computed per entry (`ControlEntry::gate_field`) since one mapping can
 //!   hold several PLCs/slaves and each is granted on its own.
@@ -21,7 +21,7 @@
 //!   redis-cli HSET control acme/site/area2/machine_c 1
 //!   redis-cli HSET control acme/site/area3/machine_c 1
 //!   ```
-//! - Connection error / URL not set → log a warning + **deny everything**.
+//! - Connection error / URL not set: log a warning and deny everything.
 
 use anyhow::{Context, Result};
 use redis::{AsyncCommands, aio::ConnectionManager};
@@ -31,7 +31,7 @@ use tracing::{info, warn};
 /// Default hash key in Valkey.
 pub const DEFAULT_GATE_KEY: &str = "control";
 
-/// The "global kill switch" field — `"1"` enables control for all machines,
+/// The "global kill switch" field. `"1"` enables control for all machines,
 /// any other value (or missing) denies.
 pub const GLOBAL_FIELD: &str = "global";
 
@@ -39,7 +39,7 @@ pub const GLOBAL_FIELD: &str = "global";
 /// hash key. The machine field is passed in on each [`ControlGate::is_granted`] call.
 ///
 /// `conn = None` semantics: deny all control (Redis unavailable or URL not
-/// set). Deliberately not `Option<ConnectionManager>` at the call site — the
+/// set). Not `Option<ConnectionManager>` at the call site, so the
 /// caller just holds a `ControlGate` and calls `is_granted`.
 pub struct ControlGate {
     conn: Option<ConnectionManager>,
@@ -47,9 +47,9 @@ pub struct ControlGate {
 }
 
 impl ControlGate {
-    /// Connect to Redis/Valkey. If `url == None` (env `CACHE_URL` empty) → the
+    /// Connect to Redis/Valkey. If `url == None` (env `CACHE_URL` empty), the
     /// gate is disabled (deny all, log a warning once at startup).
-    /// If the connection fails → same, deny all (log an error).
+    /// If the connection fails, same: deny all (log an error).
     ///
     /// Does not return `Result` because Redis being down must not block
     /// edge-client startup (telemetry + heartbeat still run, only control is
@@ -94,18 +94,18 @@ impl ControlGate {
 
     /// Check whether the operator has granted control for `machine_field`.
     ///
-    /// Returns `true` **only** if:
+    /// Returns `true` only if:
     /// 1. The Redis connection is active (gate enabled), and
     /// 2. HGETALL succeeds, and
     /// 3. the hash has field `global == "1"`, and
     /// 4. the hash has field `{machine_field} == "1"`.
     ///
-    /// If **any** of the above is false → returns `false` with a warning log.
-    /// Does not return `Result` — the caller (`dispatch`) doesn't need to know
+    /// If any of the above is false, returns `false` with a warning log.
+    /// Does not return `Result`: the caller (`dispatch`) doesn't need to know
     /// the detailed reason, just "allowed or not".
     pub async fn is_granted(&mut self, machine_field: &str) -> bool {
         let Some(conn) = self.conn.as_mut() else {
-            // Gate disabled at startup, already logged a warning — don't spam
+            // Gate disabled at startup and already logged a warning. Don't spam
             // per message.
             return false;
         };
@@ -127,10 +127,10 @@ impl ControlGate {
 /// `is_granted` so it can be unit-tested without Redis.
 ///
 /// Semantics:
-/// - empty hash → false
-/// - `global` missing or != `"1"` → false
-/// - `{machine_field}` missing or != `"1"` → false
-/// - both == `"1"` → true
+/// - empty hash: false
+/// - `global` missing or != `"1"`: false
+/// - `{machine_field}` missing or != `"1"`: false
+/// - both == `"1"`: true
 pub fn evaluate_gate(map: &HashMap<String, String>, machine_field: &str) -> bool {
     if map.is_empty() {
         return false;
@@ -141,7 +141,7 @@ pub fn evaluate_gate(map: &HashMap<String, String>, machine_field: &str) -> bool
 }
 
 // ===========================================================================
-// Tests — pure function only. The Redis-backed path needs an integration test.
+// Tests: pure function only. The Redis-backed path needs an integration test.
 // ===========================================================================
 
 #[cfg(test)]
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn other_machine_granted_does_not_grant_this_one() {
-        // The operator enabled only Area 1 machine_a + machine_b — the Area 2 +
+        // The operator enabled only Area 1 machine_a + machine_b. The Area 2 +
         // Area 3 machines must still be denied.
         let m = map_of(&[
             ("global", "1"),
@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn non_one_string_denies() {
-        // Strict equality — only the literal "1" grants.
+        // Strict equality: only the literal "1" grants.
         // "2", "true", "yes" all deny.
         for v in ["0", "2", "true", "TRUE", "yes", "on", "", " "] {
             let m = map_of(&[("global", v), (FIELD_750, "1")]);
