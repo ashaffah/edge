@@ -1,20 +1,20 @@
 {
   "_notes": [
-    "Scenario: PLC + SLAVE + WEIGHER — all three modes active at once.",
+    "Scenario: PLC + SLAVE + WEIGHER: all three modes active at once.",
     "machine_id is derived from the first device_type='master': {location}/{name} = area2/machine_c.",
     "The slave (chiller) is polled via Modbus RTU, sharing the RS-485 port, each with a different unit_id.",
-    "The weigher is read via serial ASCII on a separate port — no Modbus polling.",
-    "bridge: automatically syncs the chiller outlet temperature → PLC setpoint (no operator).",
+    "The weigher is read via serial ASCII on a separate port, no Modbus polling.",
+    "bridge: automatically syncs the chiller outlet temperature to the PLC setpoint (no operator).",
     "parser.raw_topic: publish all capture groups as JSON to {base}/{location}/{name}/raw.",
     "  Payload: {\"weight\":12.5,\"unit\":\"kg\"}.",
-    "commands: optional — serial commands triggered from MQTT directly to the scale.",
-    "  Topic: {base}/{location}/{name}/cmd/{key} → edge-client writes to the serial port."
+    "commands: optional serial commands triggered from MQTT directly to the scale.",
+    "  Topic: {base}/{location}/{name}/cmd/{key}, then edge-client writes to the serial port."
   ],
   "base_topic": "acme/site",
   "poll_interval_ms": 1000,
   "devices": [
     {
-      "_comment": "Main PLC — Modbus TCP, sets machine_id = area2/machine_c.",
+      "_comment": "Main PLC: Modbus TCP, sets machine_id = area2/machine_c.",
       "device_type": "master",
       "device_id": "plc1",
       "location": "area2",
@@ -80,7 +80,7 @@
       ]
     },
     {
-      "_comment": "Chiller slave — Modbus RTU via RS-485 (shares /dev/ttyUSB0), unit_id=8.",
+      "_comment": "Chiller slave: Modbus RTU via RS-485 (shares /dev/ttyUSB0), unit_id=8.",
       "device_type": "slave",
       "device_id": "slave1",
       "location": "area2",
@@ -137,7 +137,7 @@
       ]
     },
     {
-      "_comment": "GSC scale — serial ASCII on a separate port, no Modbus.",
+      "_comment": "GSC scale: serial ASCII on a separate port, no Modbus.",
       "device_type": "weigher",
       "device_id": "weigher_gsc",
       "location": "area2",
@@ -230,9 +230,9 @@
     }
   ],
   "_bridge_notes": [
-    "Bridge: read the chiller outlet temperature → write it to the PLC tank setpoint.",
+    "Bridge: read the chiller outlet temperature, then write it to the PLC tank setpoint.",
     "Runs every poll_interval_ms, bypasses the control gate, needs no operator.",
-    "The PLC always wins — the bridge re-asserts it every cycle."
+    "The PLC always wins: the bridge re-asserts it every cycle."
   ],
   "bridge": [
     {

@@ -20,7 +20,7 @@ RUN rustup target add x86_64-pc-windows-gnu
 ENV CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
 ENV CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc
 
-# -ladvapi32: Windows Advanced API — needed by some Windows crates
+# -ladvapi32: Windows Advanced API, needed by some Windows crates
 # (registry, crypto, event logging). The linker won't error if it's unused.
 ENV RUSTFLAGS="-C link-arg=-ladvapi32"
 

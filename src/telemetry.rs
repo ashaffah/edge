@@ -1,4 +1,4 @@
-//! Telemetry polling loop: Modbus TCP → decode → MQTT publish per parameter.
+//! Telemetry polling loop: read Modbus TCP, decode, then MQTT publish per parameter.
 //!
 //! Strategy:
 //! - Build a `TopicIndex` for 1 machine from the JSON mapping, filtering params
@@ -8,10 +8,10 @@
 //! - Publish each param to `{base}/{machine}/{topic}` as a raw scalar string
 //!   (one topic per value).
 //! - Error handling:
-//!   - Connect failed → log + 5s backoff + retry (no crash)
-//!   - Read failed mid-loop → break the inner loop, reconnect
-//!   - Decode failed per-param → log + skip that param, continue with the others
-//!   - Publish failed per-topic → log, continue (the rumqttc queue is handled
+//!   - Connect failed: log + 5s backoff + retry (no crash)
+//!   - Read failed mid-loop: break the inner loop, reconnect
+//!   - Decode failed per-param: log + skip that param, continue with the others
+//!   - Publish failed per-topic: log, continue (the rumqttc queue is handled
 //!     internally)
 
 use crate::shared::{Category, DataType, ModbusBinding, TopicEntry, TopicIndex};
@@ -25,7 +25,7 @@ use tracing::{debug, info, warn};
 use crate::modbus_client::{ReadConn, ReaderFactory};
 use crate::settings::Settings;
 
-/// Backoff between reconnect attempts — same as `mqtt::POLL_ERROR_BACKOFF`.
+/// Backoff between reconnect attempts, same as `mqtt::POLL_ERROR_BACKOFF`.
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 
 /// Telemetry runtime configuration: derived from `Settings` at startup,
@@ -55,26 +55,26 @@ pub struct TelemetryConfig {
     pub source_sessions: Vec<SourcePollSession>,
 }
 
-/// Polling state per source device. Independent of the PLC — same bus (TCP) or
+/// Polling state per source device. Independent of the PLC: same bus (TCP) or
 /// same actor (RTU) but a different unit_id, with separate error handling.
 #[derive(Clone)]
 pub struct SourcePollSession {
     /// Device name (the key in `mapping.sources`). Used for logging.
     pub device_name: String,
-    /// This device's machine id `{location}/{name}` — used for the per-machine
+    /// This device's machine id `{location}/{name}`, used for the per-machine
     /// plc_status topic (`{base}/{machine_id}/plc/status`).
     pub machine_id: String,
     /// ReaderFactory for this source (built with the device's unit_id).
     pub reader_factory: ReaderFactory,
-    /// Holding + coil entries — bulk read from address 0.
+    /// Holding + coil entries, bulk read from address 0.
     pub entries: Vec<TopicEntry>,
     pub holding_count: u16,
     pub coil_count: u16,
-    /// Input register entries (FC4) — targeted read per entry at a specific
+    /// Input register entries (FC4), targeted read per entry at a specific
     /// address. Not bulk-read from 0 because the address space can be sparse
     /// (e.g. address 1000).
     pub input_entries: Vec<TopicEntry>,
-    /// Discrete input entries (FC2) — targeted read per entry, always boolean.
+    /// Discrete input entries (FC2), targeted read per entry, always boolean.
     pub discrete_entries: Vec<TopicEntry>,
 }
 
@@ -92,7 +92,7 @@ impl TelemetryConfig {
         let idx = TopicIndex::from_device_mapping(&settings.base_topic, &settings.mapping);
 
         // Filter to params with a modbus binding, monitoring category only.
-        // The control category is not published as telemetry readback — the
+        // The control category is not published as telemetry readback. The
         // control-state authority is the command history on the consumer side.
         let entries: Vec<TopicEntry> = idx
             .entries
@@ -118,11 +118,11 @@ impl TelemetryConfig {
         for device in &settings.mapping.devices {
             use crate::shared::DeviceType;
             if device.device_type == DeviceType::Weigher {
-                continue; // weigher doesn't use Modbus — handled by weigher::run
+                continue; // weigher doesn't use Modbus, handled by weigher::run
             }
             if device.device_type == DeviceType::Master && !primary_plc_skipped {
                 primary_plc_skipped = true;
-                continue; // primary PLC — already handled by the main bulk read loop
+                continue; // primary PLC, already handled by the main bulk read loop
             }
             let device_id = &device.device_id;
             let source_entries: Vec<TopicEntry> = idx
@@ -214,7 +214,7 @@ fn compute_coil_count(entries: &[TopicEntry]) -> u16 {
 }
 
 /// Decode 1 param from the bulk-read buffer, then format it as an MQTT string
-/// payload. Pure function — no I/O. Independently testable.
+/// payload. Pure function, no I/O. Independently testable.
 ///
 /// Return value: `Ok(payload)` ready to publish, or `Err` if:
 /// - The address is out of the buffer range (the PLC didn't return as many
@@ -296,7 +296,7 @@ fn decode_and_format(entry: &TopicEntry, holdings: &[u16], coils: &[bool]) -> Re
 }
 
 /// Publish 1 batch of entries (PLC or 1 source device) to MQTT. Pure publish
-/// logic — the caller provides the holdings/coils buffer from the bulk read.
+/// logic. The caller provides the holdings/coils buffer from the bulk read.
 /// Does not break the loop when a per-entry decode/publish fails; it accumulates
 /// an error count and continues.
 async fn publish_entries(
@@ -332,8 +332,8 @@ async fn publish_entries(
 }
 
 /// Poll one source-device tick: ensure the reader is connected (lazy), bulk
-/// read, publish. Any error → drop the reader (next tick reconnects). Does not
-/// return an error to the caller — a source failure must not trigger a PLC
+/// read, publish. On any error the reader is dropped (next tick reconnects). Does not
+/// return an error to the caller: a source failure must not trigger a PLC
 /// reconnect.
 async fn poll_and_publish_source(
     session: &SourcePollSession,
@@ -387,12 +387,12 @@ async fn poll_and_publish_source(
     };
     publish_entries(client, &session.entries, &holdings, &coils, qos).await;
 
-    // FC4 input registers — targeted read per entry (address can be sparse).
+    // FC4 input registers: targeted read per entry (address can be sparse).
     //
     // Two decode modes based on the presence of `scale`:
-    // - `scale: Some(x)` → read 1 register, result is `raw as f64 * x`. Used for
-    //   PLCs that store the value as a scaled integer (e.g. chiller: 250 → 25.0°C).
-    // - `scale: None` → read 2 registers, decode as IEEE 754 float32 via
+    // - `scale: Some(x)`: read 1 register, result is `raw as f64 * x`. Used for
+    //   PLCs that store the value as a scaled integer (e.g. chiller: 250 becomes 25.0°C).
+    // - `scale: None`: read 2 registers, decode as IEEE 754 float32 via
     //   `byte_order.decode_f32`. For PLCs that store a float in the input
     //   register space. Integer without scale: decode as u32 via
     //   `byte_order.decode_u32`.
@@ -424,7 +424,7 @@ async fn poll_and_publish_source(
                         format!("{v}")
                     }
                     DataType::Float => {
-                        // 1-register scaled integer (e.g. chiller: raw=250, scale=0.1 → 25.0).
+                        // 1-register scaled integer (e.g. chiller: raw=250, scale=0.1 gives 25.0).
                         let v = regs[0] as f64 * scale.unwrap_or(1.0);
                         format!("{v:.2}")
                     }
@@ -440,7 +440,7 @@ async fn poll_and_publish_source(
                         }
                     }
                     DataType::String => {
-                        // A string type has no Modbus binding — it never reaches
+                        // A string type has no Modbus binding, so it never reaches
                         // here because the from_settings filter excludes entries
                         // without a modbus binding before this loop.
                         warn!(key = %entry.key, "string type in input_registers, skip");
@@ -470,7 +470,7 @@ async fn poll_and_publish_source(
         }
     }
 
-    // FC2 discrete inputs — targeted read per entry, always boolean.
+    // FC2 discrete inputs: targeted read per entry, always boolean.
     for entry in &session.discrete_entries {
         let Some(ModbusBinding::ReadDiscreteInputs { address }) = &entry.modbus else {
             continue;
@@ -506,8 +506,8 @@ async fn poll_and_publish_source(
 ///
 /// Lifecycle per "session":
 /// 1. Connect Modbus TCP (PLC reader)
-/// 2. Loop: tick interval → bulk read PLC → decode → publish, then poll each
-///    source session (independent — an error on one source doesn't trigger a PLC
+/// 2. Loop: on each tick, bulk read the PLC, decode and publish, then poll each
+///    source session (independent: an error on one source doesn't trigger a PLC
 ///    reconnect)
 /// 3. On a PLC read error, drop the reader (auto-disconnect via Drop) + backoff +
 ///    return to step 1. Source readers are cached outside the outer loop so
@@ -530,7 +530,7 @@ pub async fn run(
             "no parameter has a modbus binding (PLC or source) — telemetry loop idle. \
              Check mapping.json if this is unexpected."
         );
-        // Idle forever — nothing to read. But don't exit, so the
+        // Idle forever, nothing to read. But don't exit, so the
         // tokio::select! in main doesn't panic if telemetry "finishes".
         std::future::pending::<()>().await;
         return;
@@ -545,14 +545,14 @@ pub async fn run(
         "telemetry polling starting"
     );
 
-    // Cache a reader per source. Lazy-connect on first poll, drop on error →
+    // Cache a reader per source. Lazy-connect on first poll, drop on error and
     // reconnect next tick. Not using the `vec![None; N]` macro because
     // `Box<dyn ReadConn>` isn't Clone (the vec! macro needs Clone via
     // expansion). (0..N).map(|_| None).collect() bypasses the Clone requirement.
     let mut source_readers: Vec<Option<Box<dyn ReadConn>>> =
         (0..config.source_sessions.len()).map(|_| None).collect();
 
-    // Send "disconnected" once at the start — before the first connect.
+    // Send "disconnected" once at the start, before the first connect.
     // plc_status::run publishes to MQTT as soon as it receives this signal.
     let _ = status_tx.send(false);
 
@@ -622,7 +622,7 @@ pub async fn run(
 }
 
 // ===========================================================================
-// Tests — focused on pure decode/format. The polling loop is manually smoke-tested.
+// Tests: focused on pure decode/format. The polling loop is manually smoke-tested.
 // ===========================================================================
 
 #[cfg(test)]
@@ -669,13 +669,13 @@ mod tests {
         let holdings = vec![0x4297, 0x0000];
         let coils = vec![];
         let out = decode_and_format(&entry, &holdings, &coils).unwrap();
-        // f32 75.5 with {:.2} → "75.50"
+        // f32 75.5 with {:.2} gives "75.50"
         assert_eq!(out, "75.50");
     }
 
     #[test]
     fn decode_holding_integer_casts_from_float() {
-        // run_time: previously decoded as float, current type=integer → cast as i64
+        // run_time: previously decoded as float, current type=integer, so cast as i64
         // 12.5f32 = 0x41480000 in big_big = regs [0x4148, 0x0000]
         let entry = holding_entry("run_time", DataType::Integer, 6);
         let mut holdings = vec![0u16; 8];
@@ -689,8 +689,8 @@ mod tests {
 
     #[test]
     fn decode_holding_float_with_scale_applied() {
-        // Param with scale: 0.1 — raw 750.0 → publish "75.00"
-        // 750.0f32 = 0x443B8000 → big_big regs [0x443B, 0x8000]
+        // Param with scale: 0.1, raw 750.0 publishes "75.00"
+        // 750.0f32 = 0x443B8000, big_big regs [0x443B, 0x8000]
         let entry = TopicEntry {
             machine: "area3/machine_c".into(),
             device: None,
@@ -708,14 +708,14 @@ mod tests {
         };
         let holdings = vec![0x443Bu16, 0x8000];
         let out = decode_and_format(&entry, &holdings, &[]).unwrap();
-        // 750.0f32 * 0.1 = 75.0 → "75.00"
+        // 750.0f32 * 0.1 = 75.0, formatted "75.00"
         assert_eq!(out, "75.00");
     }
 
     #[test]
     fn decode_holding_scale_none_is_noop() {
-        // scale: None must be identical to scale: Some(1.0) — backward-compat
-        // 75.5f32 = 0x42970000 → big_big regs [0x4297, 0x0000]
+        // scale: None must be identical to scale: Some(1.0) (backward compat)
+        // 75.5f32 = 0x42970000, big_big regs [0x4297, 0x0000]
         let entry_no_scale = holding_entry("temp_tank", DataType::Float, 0);
         let entry_scale_one = TopicEntry {
             modbus: Some(ModbusBinding::ReadHoldingRegisters {
@@ -746,7 +746,7 @@ mod tests {
 
     #[test]
     fn decode_holding_address_out_of_bounds_errors() {
-        // Param at addr 10 but the buffer only has 4 registers → addr 10+1=11 out
+        // Param at addr 10 but the buffer only has 4 registers, so addr 10+1=11 is out
         let entry = holding_entry("current_motor", DataType::Float, 10);
         let holdings = vec![0u16; 4];
         let err = decode_and_format(&entry, &holdings, &[])
@@ -785,9 +785,9 @@ mod tests {
             coil_entry("c", 0),
             coil_entry("d", 68),
         ];
-        // Max holding addr = 12, span 2 → count = 14
+        // Max holding addr = 12, span 2, so count = 14
         assert_eq!(compute_holding_count(&entries), 14);
-        // Max coil addr = 68 → count = 69
+        // Max coil addr = 68, so count = 69
         assert_eq!(compute_coil_count(&entries), 69);
     }
 
@@ -799,7 +799,7 @@ mod tests {
     }
 
     /// The telemetry polling loop publishes only Category::Monitoring, not
-    /// Category::Control — control readback is owned by control_subscriber.
+    /// Category::Control: control readback is owned by control_subscriber.
     /// The filter predicate is the same one used in
     /// `TelemetryConfig::from_settings`.
     #[test]
@@ -816,9 +816,9 @@ mod tests {
             modbus: Some(ModbusBinding::WriteSingleCoil { address }),
         };
         let entries = [
-            holding_entry("current_motor", DataType::Float, 10), // Monitoring + read binding → include
-            write_coil_entry("control_lamp", 5),                 // Control + write binding → skip
-            write_coil_entry("control_motor", 6),                // Control + write binding → skip
+            holding_entry("current_motor", DataType::Float, 10), // Monitoring + read binding: include
+            write_coil_entry("control_lamp", 5),                 // Control + write binding: skip
+            write_coil_entry("control_motor", 6),                // Control + write binding: skip
         ];
         let filtered: Vec<&TopicEntry> = entries
             .iter()
@@ -882,7 +882,7 @@ mod tests {
         assert_eq!(plc.len(), 1, "1 PLC monitoring entry");
         assert_eq!(plc[0].key, "current_motor");
 
-        // Chiller partition — device field = device_id ("slave1"), not name ("chiller").
+        // Chiller partition: device field = device_id ("slave1"), not name ("chiller").
         // The topic still uses name: acme/site/area2/chiller/temp/out.
         let chiller: Vec<&TopicEntry> = idx
             .entries

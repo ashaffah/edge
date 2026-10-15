@@ -1,7 +1,7 @@
 //! Edge-client domain types.
 //!
 //! Contains the MQTT parameter mapping definitions + Modbus register semantics.
-//! Pure types with no I/O — the file loader lives in `settings.rs`.
+//! Pure types with no I/O. The file loader lives in `settings.rs`.
 
 mod mapping;
 mod modbus;

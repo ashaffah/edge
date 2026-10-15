@@ -1,12 +1,12 @@
 # edge
 
-Rust edge agent for industrial IoT gateways. It polls **Modbus** (TCP / RTU) from
-PLCs and reads **serial-ASCII weighing scales**, then publishes each parameter to
-**MQTT** — one topic per value. Everything about a machine (IDs, connections,
-registers, poll interval) lives in a single JSON mapping file; there is no
-per-machine recompile.
+Rust edge agent for industrial IoT gateways. It polls Modbus (TCP / RTU) from
+PLCs and reads serial-ASCII weighing scales, then publishes each parameter to
+MQTT, one topic per value. Everything about a machine (IDs, connections,
+registers, poll interval) lives in a single JSON mapping file, so a new machine
+does not need a rebuild.
 
-Designed to run on small ARM/x86 Linux boards (Raspberry Pi and similar) as a
+It runs on small ARM/x86 Linux boards (Raspberry Pi and similar) as a
 long-lived systemd service.
 
 > 🇮🇩 Indonesia: [README.id.md](README.id.md)
@@ -22,6 +22,7 @@ long-lived systemd service.
   - [Modbus bindings](#modbus-bindings)
   - [Byte order](#byte-order)
   - [Weigher parser & commands](#weigher-parser--commands)
+  - [Scale notes](#scale-notes)
   - [Bridge rules](#bridge-rules)
 - [MQTT topic layout](#mqtt-topic-layout)
 - [Control gate](#control-gate)
@@ -31,17 +32,18 @@ long-lived systemd service.
 
 ## Layout
 
-Single package `edge-client` (source under [`src/`](src/)):
+Single package `edge-client`:
 
-| Path                           | What it is                                                                 |
-| ------------------------------ | -------------------------------------------------------------------------- |
-| [`src/`](src/)                 | The agent: Modbus poll + weigher read → MQTT publish, control gate, health |
-| [`src/shared/`](src/shared/)   | Mapping/Modbus domain types (JSON mapping schema + register semantics)     |
-| [`src/scale.rs`](src/scale.rs) | `edge-client scale` subcommand — diagnose raw scale serial output          |
+- [`src/`](src/): the agent. Modbus polling and weigher reading, MQTT publishing,
+  control gate, heartbeat and resource reporting.
+- [`src/shared/`](src/shared/): mapping and Modbus domain types (JSON mapping
+  schema, register semantics).
+- [`src/scale.rs`](src/scale.rs): the `edge-client scale` subcommand, which
+  prints raw scale serial output.
 
-One `edge-client` instance runs **one machine** (though that machine may span a
-primary PLC plus additional Modbus slaves and weighers on the same board). It
-does no persistence — everything is published to MQTT and consumed elsewhere.
+One `edge-client` instance runs one machine. That machine can have a primary PLC
+plus additional Modbus slaves and weighers on the same board. The agent stores
+nothing locally: everything is published to MQTT and consumed elsewhere.
 
 Internally the agent spawns concurrent tasks via `tokio::select!`: the MQTT
 event-loop driver, the heartbeat/resource/telemetry/PLC-status/weigher
@@ -106,19 +108,17 @@ each MQTT topic as `{base_topic}/{location}/{name}/{topic}`.
 }
 ```
 
-The **machine id** is derived from the first device, in priority order
-PLC → slave → weigher, as `{location}/{name}`.
+The machine id is `{location}/{name}` of the first `master` device. If there
+is none, the first `slave` is used, then the first `weigher`.
 
 ### Device types & connections
 
 Each entry in `devices[]` has a `device_type`, a stable `device_id` (used for
 routing and bridge references), a `location`, a `name`, and a `connection`.
 
-| `device_type` | Role                                                                   |
-| ------------- | ---------------------------------------------------------------------- |
-| `master`      | Primary PLC — sets the machine id and the main Modbus transport        |
-| `slave`       | Additional Modbus device (RS-485 chiller, sensor panel, second PLC, …) |
-| `weigher`     | Serial-ASCII weighing scale (no Modbus)                                |
+- `master`: primary PLC. Sets the machine id and the main Modbus transport.
+- `slave`: additional Modbus device (RS-485 chiller, sensor panel, second PLC).
+- `weigher`: serial-ASCII weighing scale, no Modbus.
 
 Connection types (`connection.type`):
 
@@ -136,17 +136,20 @@ Connection types (`connection.type`):
 ```
 
 Multiple slaves on the same RS-485 bus (same `path`) share one actor task and are
-distinguished by `unit_id` — the port is opened exactly once. To reach an
-RTU device behind an Ethernet↔RS-485 converter running in transparent (raw-RTU)
-mode, point the connection at the converter.
+distinguished by `unit_id`, so the port is opened once. A `tcp` connection
+speaks Modbus TCP, so an Ethernet to RS-485 converter has to run as a Modbus TCP
+gateway. Raw RTU over TCP (the converter's transparent mode) exists as a
+transport in the code but cannot be selected from the mapping yet.
 
 ### Parameters & categories
 
 Each device declares parameters under three arrays:
 
-- **`monitoring[]`** — read and published as telemetry.
-- **`set[]`** — writable setpoints (float/integer), written on MQTT publish. **Not** gate-protected.
-- **`control[]`** — actuator on/off (register or coil), written on MQTT publish. **Gate-protected.**
+- `monitoring[]`: read and published as telemetry.
+- `set[]`: writable setpoints (float/integer), written on MQTT publish. Not
+  checked by the control gate.
+- `control[]`: actuator on/off (register or coil), written on MQTT publish.
+  Checked by the control gate.
 
 A parameter looks like:
 
@@ -158,7 +161,7 @@ A parameter looks like:
   "type": "float", // float | integer | boolean | string
   "unit": "C", // optional
   "modbus": {
-    /* binding — see below; omit for weigher params */
+    /* binding, see below; omit for weigher params */
   },
 }
 ```
@@ -168,7 +171,7 @@ capture-group values).
 
 ### Modbus bindings
 
-`modbus.kind` maps directly to a Modbus function code — no inference:
+`modbus.kind` maps directly to a Modbus function code:
 
 | `kind`                     | FC   | Use                                                   |
 | -------------------------- | ---- | ----------------------------------------------------- |
@@ -210,7 +213,7 @@ Examples:
 
 | `byte_order`    | Byte | Word | Typical vendor                   |
 | --------------- | ---- | ---- | -------------------------------- |
-| `big_big`       | BE   | BE   | "network order" — Schneider, ABB |
+| `big_big`       | BE   | BE   | Schneider, ABB ("network order") |
 | `little_big`    | LE   | BE   | Siemens S7                       |
 | `big_little`    | BE   | LE   | Schneider Quantum, some Modicon  |
 | `little_little` | LE   | LE   | some Mitsubishi / generic        |
@@ -221,7 +224,7 @@ byte and/or word order.
 ### Weigher parser & commands
 
 A `weigher` device reads ASCII lines from serial and parses them with a regex
-using **named capture groups**; each group name must match a `monitoring` `key`.
+using named capture groups. Each group name must match a `monitoring` `key`.
 
 ```jsonc
 "parser": {
@@ -233,14 +236,14 @@ using **named capture groups**; each group name must match a `monitoring` `key`.
 }
 ```
 
-- `byte_map` remaps raw bytes before ASCII decode — for brands that encode digits
+- `byte_map` remaps raw bytes before ASCII decode, for brands that encode digits
   as non-standard bytes (e.g. GSC uses `0xB0`–`0xB9` for `'0'`–`'9'`). Leave it
   empty for standard-ASCII brands (e.g. Fujitsu).
 - `raw_topic`, if set, publishes `{"weight": 12.50, "unit": "kg"}` to
   `{base}/{location}/{name}/{raw_topic}` alongside the per-key topics.
 - `stable` gates publishing on the scale's stable/motion flag: add a capture
-  group for the status token (e.g. `(?P<st>ST|US)`) and set `group`/`equals` —
-  only lines whose token equals `equals` are published, so in-motion readings are
+  group for the status token (e.g. `(?P<st>ST|US)`) and set `group`/`equals`.
+  Only lines whose token equals `equals` are published, so in-motion readings are
   dropped. Omit to publish every parsed line.
 - `read_timeout_ms` is an idle watchdog: if the port stays open but sends nothing
   for this long, the connection is reopened (catches a silent-but-open port).
@@ -256,6 +259,137 @@ Publishing to `{base}/{location}/{name}/cmd/{key}` writes the command's
   { "key": "tare",  "serial_cmd": "T\\r\\n" },
   { "key": "zero",  "serial_cmd": "Z\\r\\n" },
   { "key": "print", "serial_cmd": "P\\r\\n" }
+]
+```
+
+### Scale notes
+
+Settings used for the scales in the weighing room. All of them are `weigher`
+devices with a `serial_ascii` connection and no Modbus. The `connection` blocks
+differ per brand, so do not copy one to another scale without checking.
+
+#### GSC
+
+- Serial: 9600 baud, 7 data bits, no parity, 1 stop bit.
+- Digits are sent as bytes `0xB0` to `0xB9` instead of ASCII `'0'` to `'9'`, so
+  `byte_map` maps bytes 176 to 185 onto 48 to 57.
+- The regex has an optional `st` group for the `ST`/`US` status token. It is
+  published in the `raw` JSON, but no `stable` rule is set, so in-motion lines
+  are published too.
+- Commands end with CR LF: `T` tares, `Z` zeroes, `P` prints.
+
+```jsonc
+"connection": { "type": "serial_ascii", "path": "COM3",
+  "baud": 9600, "parity": "none", "stop_bits": 1, "data_bits": 7 },
+"parser": {
+  "regex": "(?:(?P<st>ST|US)\\D*?)?(?P<weight>[-+]?[0-9]+\\.[0-9]+)(?P<unit>[A-Za-z]*)",
+  "byte_map": [
+    { "from": 176, "to": 48 }, { "from": 177, "to": 49 },
+    { "from": 178, "to": 50 }, { "from": 179, "to": 51 },
+    { "from": 180, "to": 52 }, { "from": 181, "to": 53 },
+    { "from": 182, "to": 54 }, { "from": 183, "to": 55 },
+    { "from": 184, "to": 56 }, { "from": 185, "to": 57 }
+  ],
+  "raw_topic": "raw"
+},
+"commands": [
+  { "key": "tare",  "serial_cmd": "T\\r\\n" },
+  { "key": "zero",  "serial_cmd": "Z\\r\\n" },
+  { "key": "print", "serial_cmd": "P\\r\\n" }
+]
+```
+
+#### Fujitsu (analytical balance)
+
+- Serial: 9600 baud, 8 data bits, no parity, 1 stop bit.
+- Output is standard ASCII, so `byte_map` stays empty.
+- Each reading is a multi-line record with one field per line: `TTYPE`, `ID`,
+  `DATE`, `TIME`, `TEMP`, `BAT`, `MODE`, `REF`, `STATUS`, `STEP`, `TARE`,
+  `ZERO`, `WT`. The weight line looks like `WT:0.00g`, or `WT:-0.12g` after a
+  tare. The unit is grams.
+- The parser works per line, so the regex is anchored on `WT:`. Without it,
+  lines such as `TEMP:25.9C`, `BAT:7.1V` or `REF:2000.00g` are captured as weight
+  too. `[-+]?` is needed, otherwise negative readings do not match and are
+  dropped without a warning.
+- The `stable` rule cannot be used: `STATUS:STEADY` is on a different line from
+  `WT:`, so the status group never matches the weight line and every line would
+  be rejected. All readings are published.
+- Commands end with CR LF: `T` tares, `Z` zeroes, `P` prints.
+
+```jsonc
+"connection": { "type": "serial_ascii", "path": "/dev/ttyUSB0",
+  "baud": 9600, "parity": "none", "stop_bits": 1, "data_bits": 8 },
+"parser": {
+  "regex": "WT:\\s*(?P<weight>[-+]?[0-9.]+)\\s*(?P<unit>\\D+)",
+  "byte_map": [],
+  "raw_topic": "raw"
+},
+"commands": [
+  { "key": "tare",  "serial_cmd": "T\\r\\n" },
+  { "key": "zero",  "serial_cmd": "Z\\r\\n" },
+  { "key": "print", "serial_cmd": "P\\r\\n" }
+]
+```
+
+#### Radwag WLC/C2 (60 kg)
+
+- Serial: 9600 baud, 8 data bits, no parity, 1 stop bit (Radwag RS232 default).
+- Output is standard ASCII, so `byte_map` stays empty.
+- The regex was checked against the scale. It is not anchored and takes the
+  first number (integer or decimal) followed by a unit anywhere in the line.
+- There is no `stable` rule, so in-motion lines (marked `?`, `^` or `v` by the
+  scale) are published together with stable ones.
+- Commands end with CR LF: `T` tares, `Z` zeroes, and `print` sends `S` (Radwag's
+  "send stable result" command).
+
+```jsonc
+"connection": { "type": "serial_ascii", "path": "COM4",
+  "baud": 9600, "parity": "none", "stop_bits": 1, "data_bits": 8 },
+"parser": {
+  "regex": "(?P<weight>[-+]?\\d+(?:\\.\\d+)?)\\s*(?P<unit>[A-Za-z]+)",
+  "byte_map": [],
+  "raw_topic": "raw"
+},
+"commands": [
+  { "key": "tare",  "serial_cmd": "T\\r\\n" },
+  { "key": "zero",  "serial_cmd": "Z\\r\\n" },
+  { "key": "print", "serial_cmd": "S\\r\\n" }
+]
+```
+
+#### Gewinn XK3118T1
+
+- Read from the indicator's DB9 RS232 port, which is separate from the load
+  cell port.
+- Serial: 2400 baud, 8 data bits, no parity, 1 stop bit. The baud rate was
+  confirmed with a Web Serial test tool.
+- The indicator runs in communication mode `Co 3`: a continuous stream of net
+  weight and unit, about 7.8 frames per second, resolution 0.02 kg, each frame
+  ending with CR LF. A frame looks like `=0000.14(kg)`, a negative one like
+  `=-000.06(kg)`. The regex skips the `(` between the number and the unit.
+- `Co 3` frames have no stable flag, so the `stable` rule cannot be used.
+  Stable detection (window plus tolerance) is not implemented.
+- Commands: the XK3118T1 manual lists tare as `STX E ETX` and zero as
+  `STX D ETX`, for mode `Co 5` (command-response). Tested in `Co 3`, the
+  indicator does not reply and the stream does not change. `Co 5` has not been
+  tested.
+- The manual has no serial print command. Print is tied to the physical
+  accumulate key and only outputs in mode `Co 6` when TOTAL is pressed. The
+  `print` command is kept with an empty `serial_cmd` until this is confirmed on
+  the device.
+
+```jsonc
+"connection": { "type": "serial_ascii", "path": "COM4",
+  "baud": 2400, "parity": "none", "stop_bits": 1, "data_bits": 8 },
+"parser": {
+  "regex": "(?P<weight>[-+]?\\d+\\.\\d+)\\D*?(?P<unit>[A-Za-z]+)",
+  "byte_map": [],
+  "raw_topic": "raw"
+},
+"commands": [
+  { "key": "tare",  "serial_cmd": "\\x02E\\x03" }, // no effect in Co 3
+  { "key": "zero",  "serial_cmd": "\\x02D\\x03" }, // no effect in Co 3
+  { "key": "print", "serial_cmd": "" }             // not validated
 ]
 ```
 
@@ -285,9 +419,9 @@ All topics are prefixed `{base_topic}/{location}/{name}` (the machine id):
 | `.../heartbeat`     | publish   | `{"status":"connected"}` every 1s (retained)    |
 | `.../resources`     | publish   | `{"memory_pct","cpu_pct","ip"}` every 1s        |
 | `.../plc/status`    | publish   | `{"status":"connected"\|"disconnected"}`        |
-| `.../control/{key}` | subscribe | `"1"`/`"0"`/`"true"`/`"false"` → actuator write |
-| `.../set/{key}`     | subscribe | Numeric string → setpoint write                 |
-| `.../cmd/{key}`     | subscribe | Any payload → send the weigher `serial_cmd`     |
+| `.../control/{key}` | subscribe | `"1"`/`"0"`/`"true"`/`"false"`, actuator write  |
+| `.../set/{key}`     | subscribe | Numeric string, setpoint write                  |
+| `.../cmd/{key}`     | subscribe | Any payload, sends the weigher `serial_cmd`     |
 
 The broker Last-Will-Testament publishes `{"status":"disconnected"}` (retained)
 to the primary machine's heartbeat topic if the agent dies or the network drops.
@@ -299,7 +433,7 @@ clean session).
 Writes from `control/{key}` (FC5/FC6 actuators) are authorized by a Valkey/Redis
 hash before each write. `set/{key}` and bridge writes bypass the gate.
 
-A write is granted **only if** both the global flag and the per-machine flag are
+A write is granted only if both the global flag and the per-machine flag are
 `"1"`:
 
 ```sh
@@ -308,7 +442,7 @@ redis-cli HSET control acme/site/area2/machine_c 1
 ```
 
 If `CACHE_URL` is empty or Valkey is unreachable, **all control is denied**
-(fail-safe). The per-machine field name is `{base_topic}/{machine_id}` — the same
+(fail-safe). The per-machine field name is `{base_topic}/{machine_id}`, the same
 identifier as the MQTT topic prefix.
 
 ## Diagnosing a scale (`scale`)

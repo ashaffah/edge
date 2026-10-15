@@ -5,8 +5,8 @@ A file for [guiding AI coding agents](https://agents.md/).
 ## Project Overview
 
 `edge-client` is an edge agent that polls Modbus (TCP/RTU) registers from PLCs
-and weighers, then publishes each mapped parameter to MQTT. It is a single Rust
-binary (edition 2024, MSRV 1.95) designed to cross-compile for ARM/embedded
+and reads serial-ASCII weighers, then publishes each mapped parameter to MQTT.
+It is a single Rust binary (edition 2024, MSRV 1.99) that cross-compiles for ARM/embedded
 Linux gateways and x86_64/Windows hosts.
 
 ### Source Layout
@@ -22,7 +22,8 @@ Linux gateways and x86_64/Windows hosts.
   authorization gate and remote control.
 - `src/heartbeat.rs`, `src/resource.rs`, `src/plc_status.rs`,
   `src/telemetry.rs` - Liveness, resource monitoring, and status reporting.
-- `src/weigher.rs`, `src/scale.rs` - Weigher serial ASCII parsing.
+- `src/weigher.rs` - Weigher serial ASCII reading and parsing.
+- `src/scale.rs` - `scale` subcommand that prints raw scale serial output.
 - `src/shared/` - Shared domain types: `mapping.rs` (JSON mapping config) and
   `modbus.rs` (Modbus register/type primitives).
 

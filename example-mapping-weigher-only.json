@@ -1,25 +1,25 @@
 {
   "_notes": [
-    "Scenario: WEIGHER-ONLY — serial-ASCII scales only, no PLC / Modbus.",
+    "Scenario: WEIGHER-ONLY: serial-ASCII scales only, no PLC / Modbus.",
     "device_type='weigher' + connection.type='serial_ascii' = no Modbus polling.",
     "machine_id is derived from the first weigher: {location}/{name} = area1/scale.",
-    "parser.regex: named capture groups (?P<name>...) — the group name must match a key in monitoring.",
+    "parser.regex: named capture groups (?P<name>...). The group name must match a key in monitoring.",
     "parser.byte_map: byte-level substitution BEFORE ASCII decode.",
     "  GSC: bytes 0xB0-0xB9 (176-185) represent digits 0-9 in the GSC encoding.",
     "  Fujitsu: standard ASCII, empty byte_map.",
-    "A new brand = add a new weigher entry — no binary rebuild needed.",
-    "parser.raw_topic: optional — if set, publish all capture groups as JSON to this topic.",
-    "  Example: \"raw_topic\": \"raw\" → publish to {base}/{location}/{name}/raw with payload {\"weight\":12.5,\"unit\":\"kg\"}",
-    "commands: optional — list of serial commands that can be triggered from MQTT.",
+    "A new brand = add a new weigher entry, no binary rebuild needed.",
+    "parser.raw_topic: optional. If set, publish all capture groups as JSON to this topic.",
+    "  Example: \"raw_topic\": \"raw\" publishes to {base}/{location}/{name}/raw with payload {\"weight\":12.5,\"unit\":\"kg\"}",
+    "commands: optional list of serial commands that can be triggered from MQTT.",
     "  The operator publishes to {base}/{location}/{name}/cmd/{key} (payload ignored).",
     "  Edge-client writes serial_cmd to the scale's serial port.",
     "  Escape sequences supported: \\r \\n \\t \\xNN.",
-    "  Note: the command string differs per brand — check the scale manual."
+    "  Note: the command string differs per brand, check the scale manual."
   ],
   "base_topic": "acme/site",
   "devices": [
     {
-      "_comment": "GSC scale — non-standard digit encoding (0xB0–0xB9 = '0'–'9').",
+      "_comment": "GSC scale: non-standard digit encoding (0xB0-0xB9 = '0'-'9').",
       "device_type": "weigher",
       "device_id": "weigher_gsc",
       "location": "area1",
@@ -111,7 +111,7 @@
       ]
     },
     {
-      "_comment": "Fujitsu scale 1 — format 'WT:  23.50 kg', standard ASCII.",
+      "_comment": "Fujitsu scale 1: format 'WT:  23.50 kg', standard ASCII.",
       "device_type": "weigher",
       "device_id": "weigher_fujitsu_1",
       "location": "area1",
@@ -158,7 +158,7 @@
       ]
     },
     {
-      "_comment": "Fujitsu scale 2 — different port, same parser.",
+      "_comment": "Fujitsu scale 2: different port, same parser.",
       "device_type": "weigher",
       "device_id": "weigher_fujitsu_2",
       "location": "area1",

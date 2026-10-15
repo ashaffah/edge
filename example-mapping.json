@@ -3,13 +3,13 @@
     "Reference example of the edge-client mapping format. Copy to ./mapping.json and edit.",
     "Three device_type values are supported: 'master', 'slave', 'weigher'.",
     "connection.type: 'tcp' or 'rtu_serial' for Modbus, 'serial_ascii' for a scale.",
-    "commands (weigher): serial commands triggered from MQTT — publish to {base}/{loc}/{name}/cmd/{key}."
+    "commands (weigher): serial commands triggered from MQTT; publish to {base}/{loc}/{name}/cmd/{key}."
   ],
   "base_topic": "acme/site",
   "poll_interval_ms": 1000,
   "devices": [
     {
-      "_comment": "Main PLC — Modbus TCP.",
+      "_comment": "Main PLC: Modbus TCP.",
       "device_type": "master",
       "device_id": "plc1",
       "location": "area2",
@@ -85,7 +85,7 @@
       ]
     },
     {
-      "_comment": "Chiller slave — Modbus RTU via RS-485.",
+      "_comment": "Chiller slave: Modbus RTU via RS-485.",
       "device_type": "slave",
       "device_id": "slave1",
       "location": "area2",
@@ -142,7 +142,7 @@
       ]
     },
     {
-      "_comment": "GSC scale — serial ASCII, non-standard digit encoding (0xB0–0xB9 = '0'–'9').",
+      "_comment": "GSC scale: serial ASCII, non-standard digit encoding (0xB0-0xB9 = '0'-'9').",
       "device_type": "weigher",
       "device_id": "weigher_gsc",
       "location": "scale_area",

@@ -4,7 +4,7 @@
 //! 1. Build an `AsyncClient` with an LWT (last-will-testament) that publishes
 //!    `{"status":"disconnected"}` automatically if the edge crashes or the
 //!    network drops.
-//! 2. Drive the event loop with error tolerance — rumqttc handles
+//! 2. Drive the event loop with error tolerance. rumqttc handles
 //!    auto-reconnect, we just log and back off so we don't busy-loop while the
 //!    broker is down.
 //! 3. Expose topic helpers so other features (heartbeat, resource, telemetry
@@ -27,7 +27,7 @@ const CLIENT_QUEUE_CAP: usize = 100;
 /// Backoff on eventloop error so we don't busy-loop with log spam.
 const POLL_ERROR_BACKOFF: Duration = Duration::from_secs(5);
 
-/// LWT payload. Static — the broker publishes this if the client disconnects
+/// LWT payload. Static: the broker publishes this if the client disconnects
 /// abnormally (network drop, process crash). Same content as the heartbeat
 /// payload (`{ status }`).
 const LWT_PAYLOAD: &[u8] = br#"{"status":"disconnected"}"#;
@@ -39,7 +39,7 @@ pub fn heartbeat_topic(settings: &Settings) -> String {
 }
 
 /// Heartbeat topics for ALL unique machines (location/name) in the mapping. One
-/// instance can serve several machines (multi-PLC/slave/weigher) — each machine
+/// instance can serve several machines (multi-PLC/slave/weigher). Each machine
 /// gets its own heartbeat so the dashboard knows the status per machine. Device
 /// order is preserved; duplicate location/name pairs are skipped. The LWT still
 /// only covers the primary machine_id (`heartbeat_topic`).
@@ -53,7 +53,7 @@ pub fn heartbeat_topics(settings: &Settings) -> Vec<String> {
         }
     }
     // Defensive fallback: deriving machine_id requires at least 1 device, so
-    // topics should never be empty — but just in case.
+    // topics should never be empty, but just in case.
     if topics.is_empty() {
         topics.push(heartbeat_topic(settings));
     }
@@ -61,15 +61,15 @@ pub fn heartbeat_topics(settings: &Settings) -> Vec<String> {
 }
 
 /// Resource topics (CPU/memory/IP snapshot) for ALL unique machines
-/// (location/name) in the mapping — same as [`heartbeat_topics`].
+/// (location/name) in the mapping, same as [`heartbeat_topics`].
 ///
 /// Uses the full `machine_id` (`location/name`) so each machine has its own
 /// unique resources topic. Truncating to just the location would collide if one
-/// location has >1 edge-client (e.g. area1: 2 boards → machine_a & machine_b).
+/// location has >1 edge-client (e.g. area1: 2 boards for machine_a & machine_b).
 ///
 /// If one edge-client serves >1 PLC (e.g. line1: area2 + area3), each machine
 /// gets its own resources. The CPU/mem/IP data is the same (one board), so it's
-/// redundant — accepted so the dashboard has a resource entry per machine.
+/// redundant, but accepted so the dashboard has a resource entry per machine.
 pub fn resource_topics(settings: &Settings) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut topics = Vec::new();
@@ -104,7 +104,7 @@ pub fn publish_qos(settings: &Settings) -> QoS {
     }
 }
 
-/// Build the MQTT client + event loop. Not yet connected — connection happens
+/// Build the MQTT client + event loop. Not yet connected: connection happens
 /// implicitly once `drive_eventloop` starts polling.
 ///
 /// Uses `MqttOptions::new` + manual `set_transport` (not `parse_url`) because in
@@ -113,10 +113,10 @@ pub fn publish_qos(settings: &Settings) -> QoS {
 /// (rumqttc issue #808). The manual switch avoids this bug entirely.
 ///
 /// Transport per protocol:
-/// - `mqtt`  → TCP (default, no need to set_transport)
-/// - `mqtts` → TLS via rustls with webpki-roots
-/// - `ws`    → plain WebSocket, the host arg = full URL `ws://host:port/path`
-/// - `wss`   → WebSocket Secure, the host arg = full URL `wss://host:port/path`
+/// - `mqtt`: TCP (default, no need to set_transport)
+/// - `mqtts`: TLS via rustls with webpki-roots
+/// - `ws`: plain WebSocket, the host arg = full URL `ws://host:port/path`
+/// - `wss`: WebSocket Secure, the host arg = full URL `wss://host:port/path`
 pub fn build_client(settings: &Settings) -> Result<(AsyncClient, EventLoop)> {
     let topic = heartbeat_topic(settings);
     let m = &settings.mqtt;
@@ -136,7 +136,7 @@ pub fn build_client(settings: &Settings) -> Result<(AsyncClient, EventLoop)> {
             format!("wss://{}:{}{}", m.host, m.port, ws_path),
             Some(Transport::wss_with_default_config()),
         ),
-        // settings.rs already validates this enum — this branch is unreachable.
+        // settings.rs already validates this enum, so this branch is unreachable.
         other => anyhow::bail!("MQTT_PROTOCOL '{other}' is not recognized"),
     };
 
@@ -172,7 +172,7 @@ pub fn build_client(settings: &Settings) -> Result<(AsyncClient, EventLoop)> {
     Ok((client, eventloop))
 }
 
-/// Drive the event loop forever. Does not return normally — embed it in a
+/// Drive the event loop forever. Does not return normally; embed it in a
 /// `tokio::select!` with a shutdown signal.
 ///
 /// rumqttc handles reconnect automatically with internal exponential backoff.
@@ -182,11 +182,11 @@ pub fn build_client(settings: &Settings) -> Result<(AsyncClient, EventLoop)> {
 /// `inbox`: if `Some`, every `Event::Incoming(Publish)` is forwarded to this
 /// channel so `control_subscriber` can process it. If `None`, incoming messages
 /// are only logged. Channel full = drop the message + log a warning (does not
-/// block the eventloop — if the control subscriber is stuck, the eventloop must
+/// block the eventloop: if the control subscriber is stuck, the eventloop must
 /// stay alive for heartbeat/resource/telemetry publishing and auto-reconnect).
 ///
 /// `connack`: if `Some`, every `Event::Incoming(ConnAck)` sends a `()` signal
-/// to this channel. rumqttc defaults to `clean_session=true` — on every
+/// to this channel. rumqttc defaults to `clean_session=true`: on every
 /// reconnect the server forgets subscriptions, so the subscriber must
 /// re-subscribe. `try_send` + drop if full: re-subscribe is idempotent, so
 /// coalescing is safe.
@@ -207,7 +207,7 @@ pub async fn drive_eventloop(
             Ok(Event::Incoming(Packet::Publish(p))) => {
                 debug!(topic = %p.topic, len = p.payload.len(), "MQTT incoming publish");
                 // Topic "/cmd/" = weigher serial command (tare, zero, etc.)
-                // Any other topic = control/set from MQTT → inbox
+                // Any other topic is control/set from MQTT and goes to the inbox
                 if p.topic.contains("/cmd/") {
                     if let Some(tx) = weigher_cmd.as_ref() {
                         let _ = tx.try_send((p.topic.clone(), p.payload.to_vec()));

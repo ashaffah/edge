@@ -1,23 +1,23 @@
-//! Modbus register byte-order semantics — pure functions, no I/O.
+//! Modbus register byte-order semantics. Pure functions, no I/O.
 //!
 //! Lives in the `shared` module because:
-//! 1. Mapping parameters have a `modbus.byte_order` field that must deserialize
-//!    → the enum must be visible to the shared mapping loader.
+//! 1. Mapping parameters have a `modbus.byte_order` field that must deserialize,
+//!    so the enum must be visible to the shared mapping loader.
 //! 2. Edge-client `telemetry.rs` decodes register bytes with these methods to
 //!    publish telemetry values.
 //!
-//! Deliberate design choices:
+//! Design notes:
 //!
-//! - **No `round(value, 2)`**: rounding in the decoder would bake data loss into
+//! - No `round(value, 2)`: rounding in the decoder would bake data loss into
 //!   the lowest layer. The Rust decoder is a pure, full-precision conversion.
 //!   Domain logic to reduce precision (if needed) is handled in the polling loop
 //!   / publisher, not here.
-//! - **`f32` not `f64`**: a Modbus 32-bit float = single-precision IEEE 754.
+//! - `f32` not `f64`: a Modbus 32-bit float = single-precision IEEE 754.
 //!   Using f64 only spreads false bit-noise (12.5 becomes 12.500000476...).
-//! - **No multi-address coil AND**: a variant that takes a list of addresses and
+//! - No multi-address coil AND: a variant that takes a list of addresses and
 //!   ANDs them all. The use case is unclear. Skipped until a register map proves
-//!   it's needed. A Modbus coil is already bool — use it directly.
-//! - **No `holding_registers_to_timestamp`**: an HH:MM:SS timestamp parser from
+//!   it's needed. A Modbus coil is already bool, use it directly.
+//! - No `holding_registers_to_timestamp`: an HH:MM:SS timestamp parser from
 //!   3 registers with awkward seconds-overflow handling. Skipped by an early
 //!   decision; reactivate if RUNNING_HOURS_* is needed.
 
@@ -28,10 +28,10 @@ use serde::Deserialize;
 /// PLC vendors have different conventions for packing a 32-bit value (float or
 /// u32) into two 16-bit registers. 4 combinations:
 ///
-/// - `BigBig` (BE byte, BE word) — "network order" standard. Schneider, ABB default.
-/// - `LittleBig` (LE byte, BE word) — Siemens S7 PLC default (byte swap within a register).
-/// - `BigLittle` (BE byte, LE word) — Schneider Quantum, some Modicon (word swap).
-/// - `LittleLittle` (LE byte, LE word) — some Mitsubishi, some generic PLCs.
+/// - `BigBig` (BE byte, BE word): "network order" standard. Schneider, ABB default.
+/// - `LittleBig` (LE byte, BE word): Siemens S7 PLC default (byte swap within a register).
+/// - `BigLittle` (BE byte, LE word): Schneider Quantum, some Modicon (word swap).
+/// - `LittleLittle` (LE byte, LE word): some Mitsubishi, some generic PLCs.
 ///
 /// The `{byteorder}_{wordorder}` naming scheme deserializes automatically via
 /// serde snake_case in JSON: `"big_big"`, `"little_big"`, etc., so the mapping
@@ -46,7 +46,7 @@ pub enum ByteOrder {
 }
 
 impl Default for ByteOrder {
-    /// Default `BigBig` (BE byte, BE word) — the "network order" standard.
+    /// Default `BigBig` (BE byte, BE word), the "network order" standard.
     /// Used by `#[serde(default)]` on `ModbusBinding::HoldingRegisters.byte_order`
     /// so a parameter without an explicit `byte_order` doesn't fail to parse.
     fn default() -> Self {
@@ -134,7 +134,7 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
-    // f32 decode — all 4 byte orders use the same value (1.0f32)
+    // f32 decode: all 4 byte orders use the same value (1.0f32)
     //
     // IEEE 754 single-precision 1.0 = 0x3F800000 = bytes [0x3F, 0x80, 0x00, 0x00]
     // -----------------------------------------------------------------------
@@ -164,7 +164,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // f32 decode — a realistic value
+    // f32 decode: a realistic value
     //
     // 75.5f32 = 0x42970000 = bytes [0x42, 0x97, 0x00, 0x00]
     // e.g. for a temp/tank parameter
@@ -182,7 +182,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // f32 decode — negative value
+    // f32 decode: negative value
     //
     // -12.5f32 = 0xC1480000 = bytes [0xC1, 0x48, 0x00, 0x00]
     // -----------------------------------------------------------------------
@@ -199,14 +199,14 @@ mod tests {
         // LittleLittle: bytes[0..2] from hi_reg.to_le, bytes[2..4] from lo_reg.to_le
         //   where hi_reg = regs[1], lo_reg = regs[0]
         // Want bytes = [0xC1, 0x48, 0x00, 0x00]
-        // hi_reg.to_le_bytes() = [0xC1, 0x48] → hi_reg = 0x48C1
-        // lo_reg.to_le_bytes() = [0x00, 0x00] → lo_reg = 0x0000
-        // So regs[1] = 0x48C1, regs[0] = 0x0000 → input [0x0000, 0x48C1]
+        // hi_reg.to_le_bytes() = [0xC1, 0x48], so hi_reg = 0x48C1
+        // lo_reg.to_le_bytes() = [0x00, 0x00], so lo_reg = 0x0000
+        // So regs[1] = 0x48C1, regs[0] = 0x0000, input [0x0000, 0x48C1]
         assert_eq!(ByteOrder::LittleLittle.decode_f32([0x0000, 0x48C1]), -12.5);
     }
 
     // -----------------------------------------------------------------------
-    // f32 decode — edge cases
+    // f32 decode: edge cases
     // -----------------------------------------------------------------------
 
     #[test]
@@ -237,7 +237,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // f32 round-trip encode→decode
+    // f32 round-trip encode then decode
     // -----------------------------------------------------------------------
 
     #[test]
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn encode_f32_byte_orders_differ() {
-        let v = 1.0f32; // bytes 3F 80 00 00 — a pattern that distinguishes position
+        let v = 1.0f32; // bytes 3F 80 00 00, a pattern that distinguishes position
         let bb = ByteOrder::BigBig.encode_f32(v);
         let lb = ByteOrder::LittleBig.encode_f32(v);
         let bl = ByteOrder::BigLittle.encode_f32(v);
@@ -361,7 +361,7 @@ mod tests {
     #[test]
     fn default_byte_order_is_big_big() {
         // ModbusBinding uses #[serde(default)] so a JSON param can omit
-        // byte_order → fallback to big_big.
+        // byte_order and fall back to big_big.
         assert_eq!(ByteOrder::default(), ByteOrder::BigBig);
     }
 }

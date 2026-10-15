@@ -1,11 +1,11 @@
-//! Resource publisher: periodic snapshot of edge CPU + memory + IP → MQTT.
+//! Resource publisher: periodic snapshot of edge CPU + memory + IP, published to MQTT.
 //!
 //! Publishes `{"memory_pct": f64, "cpu_pct": f64, "ip": "..."}` to the topic
-//! `{base}/{machine}/resources`. No range validation on the edge side —
+//! `{base}/{machine}/resources`. No range validation on the edge side;
 //! dashboards/observability detect outliers.
 //!
 //! ## CPU sampling
-//! CPU% in sysinfo is computed from the **delta** between two consecutive
+//! CPU% in sysinfo is computed from the delta between two consecutive
 //! refreshes. Without a baseline, the first sample = 0 or garbage. Solution:
 //! warm up before the loop (refresh, sleep MINIMUM_CPU_UPDATE_INTERVAL, refresh
 //! again). After that the 10s interval is well above the minimum and samples
@@ -25,7 +25,7 @@ const INTERVAL: Duration = Duration::from_secs(1);
 /// `"0.0.0.0"` = an explicit "unknown", not a crash.
 const IP_UNKNOWN: &str = "0.0.0.0";
 
-/// Payload contract — field names `memory_pct` / `cpu_pct` / `ip`
+/// Payload contract: field names `memory_pct` / `cpu_pct` / `ip`
 /// (not `memory_percent` / `ip_address`).
 #[derive(Debug, Serialize)]
 struct ResourcePayload<'a> {
@@ -34,11 +34,11 @@ struct ResourcePayload<'a> {
     ip: &'a str,
 }
 
-/// Publisher loop. Never returns — the caller embeds it in a `tokio::select!`.
+/// Publisher loop. Never returns; the caller embeds it in a `tokio::select!`.
 ///
 /// `topics` = one resources topic per machine (location/name) served by this
 /// instance. The CPU/mem/IP snapshot is computed once per tick and then
-/// published to all topics (same data — one board serves many machines).
+/// published to all topics (same data, one board serves many machines).
 pub async fn run(client: AsyncClient, topics: Vec<String>, qos: QoS) {
     let mut sys = System::new();
 
@@ -95,7 +95,7 @@ async fn publish_snapshot(client: &AsyncClient, topics: &[String], qos: QoS, sys
 }
 
 /// Compute memory% from used/total bytes. Defensive against divide-by-zero if
-/// total is 0 (system info unavailable — an edge case that should not happen
+/// total is 0 (system info unavailable, an edge case that should not happen
 /// but must not crash).
 fn compute_memory_pct(used: u64, total: u64) -> f64 {
     if total == 0 {
@@ -106,7 +106,7 @@ fn compute_memory_pct(used: u64, total: u64) -> f64 {
 }
 
 /// Detect the primary IP. The `local-ip-address` crate iterates interfaces and
-/// returns the first non-loopback IPv4. Falls back to `"0.0.0.0"` on failure —
+/// returns the first non-loopback IPv4. Falls back to `"0.0.0.0"` on failure
 /// so the consumer still receives the publish and the dashboard interprets
 /// `0.0.0.0` as "not ready".
 fn detect_ip() -> String {
@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn memory_pct_handles_zero_total() {
         // Edge case: system info unavailable, total memory reported as 0.
-        // Must not panic (divide-by-zero) — returns 0.0.
+        // Must not panic (divide-by-zero); returns 0.0.
         assert_eq!(compute_memory_pct(0, 0), 0.0);
         assert_eq!(compute_memory_pct(1000, 0), 0.0);
     }

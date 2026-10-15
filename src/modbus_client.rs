@@ -1,27 +1,27 @@
 //! Modbus client abstraction: `ReadConn`/`WriteConn` traits + a factory for the
 //! 3 transports (TCP / RTU-over-TCP / RTU-Serial).
 //!
-//! **Every transport goes through a single actor connection** ([`crate::modbus_actor`]).
+//! Every transport goes through a single actor connection ([`crate::modbus_actor`]).
 //! One task owns the link; reader + writer + bridge send requests over an mpsc
 //! channel and the actor serializes them. This is required for RTU (half-duplex,
 //! one physical port) and also for plain Modbus TCP, because many small PLCs /
-//! Modbus-TCP gateways accept only ONE concurrent socket — a separate reader and
+//! Modbus-TCP gateways accept only ONE concurrent socket. A separate reader and
 //! writer socket to the same host:port makes the second one fail (write returns
 //! EINPROGRESS / os error 115).
 //!
 //! Actors are shared per endpoint via [`ActorCache`], keyed by connection
 //! identity (`tcp:host:port`, `rtu-tcp:host:port`, `serial:path`). So a reader
-//! and a writer to the **same** host:port share one connection, while a
+//! and a writer to the same host:port share one connection, while a
 //! split-port setup (e.g. `:502` read / `:503` write) keeps two independent
-//! connections — one per key.
+//! connections, one per key.
 //!
 //! Two layers:
 //!
-//! 1. **Traits** [`ReadConn`] + [`WriteConn`] = a uniform API used by
+//! 1. Traits [`ReadConn`] + [`WriteConn`]: a uniform API used by
 //!    [`crate::telemetry`] and [`crate::control_subscriber`]. They don't care
 //!    which transport is behind it.
 //!
-//! 2. **Factories** [`ReaderFactory`] + [`WriterFactory`] = built once at
+//! 2. Factories [`ReaderFactory`] + [`WriterFactory`]: built once at
 //!    startup ([`build_io`]). Each holds an actor handle; `.connect()` just
 //!    clones the handle (cheap), returning a `Box<dyn ReadConn>` /
 //!    `Box<dyn WriteConn>`. Reconnecting the physical link is handled inside the
@@ -55,21 +55,21 @@ pub trait ReadConn: Send {
     /// Read `count` coils starting at address 0.
     async fn read_coils(&mut self, count: u16) -> Result<Vec<bool>>;
 
-    /// FC4 Read Input Registers — targeted read from a specific `address`.
+    /// FC4 Read Input Registers: targeted read from a specific `address`.
     /// Differs from `read_holdings` which always reads from 0.
     async fn read_input_registers(&mut self, address: u16, count: u16) -> Result<Vec<u16>>;
 
-    /// FC2 Read Discrete Inputs — targeted read from a specific `address`.
+    /// FC2 Read Discrete Inputs: targeted read from a specific `address`.
     /// Like `read_coils` but from the input address space (read-only).
     async fn read_discrete_inputs(&mut self, address: u16, count: u16) -> Result<Vec<bool>>;
 }
 
 /// Single-register and single-coil writes. Function codes 5 & 6 in the Modbus
-/// spec — enough for mixed-mode control (holding-register on/off writes + 2 coil
+/// spec, enough for mixed-mode control (holding-register on/off writes + 2 coil
 /// writes per hydraulic actuator).
 ///
 /// `write_multiple_registers` (function code 16) was added for set_* writes that
-/// span 2 registers (float → 2 reg f32, integer → 2 reg i32). Used by
+/// span 2 registers (float as 2-reg f32, integer as 2-reg i32). Used by
 /// control_subscriber to dispatch set/* topics to the PLC + source devices.
 #[async_trait]
 pub trait WriteConn: Send {
@@ -109,28 +109,28 @@ impl WriterFactory {
 }
 
 // ===========================================================================
-// Actor cache — one actor per endpoint, shared across reader + writer + slaves
+// Actor cache: one actor per endpoint, shared across reader + writer + slaves
 // ===========================================================================
 
 /// A cache of Modbus actors keyed by connection identity (`tcp:host:port`,
 /// `rtu-tcp:host:port`, `serial:path`).
 ///
-/// **Why it's needed:** several code paths each need Modbus access to the same
-/// endpoint — (a) `build_io` for the main PLC, (b) `build_source_reader` per
+/// Several code paths each need Modbus access to the same
+/// endpoint: (a) `build_io` for the main PLC, (b) `build_source_reader` per
 /// device for telemetry, (c) `build_source_writer` per device for control.
 /// Without a cache each would spawn its own actor and open its own connection.
 /// That breaks two ways:
-/// - **Serial**: `tokio_serial::SerialStream::open` takes `TIOCEXCL` (Linux) —
+/// - Serial: `tokio_serial::SerialStream::open` takes `TIOCEXCL` (Linux), so
 ///   a second open to the same path is rejected ("Unable to acquire exclusive
 ///   lock on serial port").
-/// - **TCP / RTU-over-TCP**: many PLCs / gateways accept only ONE concurrent
-///   socket — a second connection to the same host:port makes writes fail with
+/// - TCP / RTU-over-TCP: many PLCs / gateways accept only ONE concurrent
+///   socket. A second connection to the same host:port makes writes fail with
 ///   EINPROGRESS (os error 115).
 ///
 /// The cache guarantees one endpoint = one actor task = one connection. Reader
 /// and writer to the same endpoint share it; different endpoints (e.g. a
 /// split-port `:502` read / `:503` write setup) get independent actors. Multiple
-/// slave-ids on one RS-485 bus are handled via [`ActorHandle::with_slave_id`] —
+/// slave-ids on one RS-485 bus are handled via [`ActorHandle::with_slave_id`]:
 /// a cheap sender clone + per-request ID. The actor's FIFO mpsc channel
 /// serializes frames so none overlap (see the `modbus_actor` module docs).
 ///
@@ -161,10 +161,10 @@ impl ActorCache {
     /// handle.
     ///
     /// `timings` is used only on the first spawn for that endpoint. Subsequent
-    /// calls reuse the existing actor regardless of the new `timings` — all
+    /// calls reuse the existing actor regardless of the new `timings`. All
     /// callers currently pass the fixed default from `device_conn_to_transport`.
     ///
-    /// I/O is not attempted here — `spawn` returns quickly and the actor task
+    /// I/O is not attempted here. `spawn` returns quickly and the actor task
     /// connects in the background with retry-on-fail.
     async fn get_or_spawn(
         &self,
@@ -206,7 +206,7 @@ impl ActorCache {
 /// Build a factory pair from [`ModbusSettings`] for the main PLC. Gets (or
 /// spawns) the shared actor for this endpoint via `cache`, so the reader and
 /// writer share one connection, and any source device on the same endpoint
-/// reuses it too. No I/O happens here — the actor connects in the background.
+/// reuses it too. No I/O happens here; the actor connects in the background.
 pub async fn build_io(
     settings: &crate::settings::ModbusSettings,
     cache: &ActorCache,
@@ -227,7 +227,7 @@ pub async fn build_io(
 /// Gets (or spawns) the shared actor for the device's endpoint via `cache`, so
 /// it's shared with the main PLC / other devices on the same endpoint and with
 /// this device's writer counterpart. A weigher (SerialAscii) has no Modbus
-/// reader → error.
+/// reader, so it returns an error.
 pub(crate) async fn build_source_reader(
     conn: &crate::shared::DeviceConnection,
     cache: &ActorCache,
@@ -248,7 +248,7 @@ pub(crate) async fn build_source_reader(
 }
 
 /// Build a WriterFactory for one source device. Used by control_subscriber.
-/// Logic identical to [`build_source_reader`] — shares the actor with the reader
+/// Logic identical to [`build_source_reader`]. Shares the actor with the reader
 /// counterpart (if the device also has a monitoring entry) and with other
 /// devices on the same endpoint.
 pub(crate) async fn build_source_writer(
@@ -300,7 +300,7 @@ mod tests {
     /// The cache returns the same actor handle (identical channel sender) for
     /// two calls with the same serial path. The slave_id may differ; the actor
     /// task stays single. This is the key invariant that prevents the "Unable to
-    /// acquire exclusive lock on serial port" bug — with the cache, one path =
+    /// acquire exclusive lock on serial port" bug. With the cache, one path =
     /// one `tokio_serial::SerialStream::open`.
     #[tokio::test]
     async fn cache_reuses_actor_for_same_serial_path() {
@@ -325,7 +325,7 @@ mod tests {
     }
 
     /// Different serial path = different actor. The cache must not collapse two
-    /// different physical ports into one actor — that would send frames onto the
+    /// different physical ports into one actor, which would send frames onto the
     /// wrong bus.
     #[tokio::test]
     async fn cache_separates_actors_per_serial_path() {
@@ -381,7 +381,7 @@ mod tests {
     }
 
     /// Split-port setup (`:502` read / `:503` write, same host) keeps TWO
-    /// independent actors — matches PLCs that expose a separate write port.
+    /// independent actors, matching PLCs that expose a separate write port.
     #[tokio::test]
     async fn cache_separates_actors_per_tcp_port() {
         let cache = ActorCache::new();

@@ -9,14 +9,14 @@
 //!   mapping bindings, publish each param to `{base}/{machine}/{topic}`. Only
 //!   Category::Monitoring is published (control readback is not re-published).
 //! - Subscribe to `{base}/{machine}/control/#`, receive commands from MQTT,
-//!   dispatch them to Modbus. On/off devices → `write_single_register` with
-//!   `on_value`/`off_value` from the mapping. Momentary coil →
+//!   dispatch them to Modbus. On/off devices use `write_single_register` with
+//!   `on_value`/`off_value` from the mapping. Momentary coils use
 //!   `write_single_coil`.
-//! - Re-subscribe automatically after a broker reconnect — the eventloop
+//! - Re-subscribe automatically after a broker reconnect: the eventloop
 //!   forwards ConnAck to control_subscriber to re-subscribe.
 //! - Control gate: check `HGETALL <CONTROL_GATE_KEY>` in Valkey/Redis before
 //!   every Modbus write for a control command. `CACHE_URL` empty / Redis down
-//!   → deny all control (fail-safe). Details in the `control_gate` module.
+//!   means all control is denied (fail-safe). Details in the `control_gate` module.
 //! - Read weigher serial ASCII, parse via regex, publish each key to MQTT.
 //!   Optional: publish combined JSON to `raw_topic` if configured.
 //! - Run until `Ctrl+C`.
@@ -32,10 +32,10 @@
 //!   4. Test control: publish `"1"` to `acme/site/{machine}/control/lamp`
 //!      via `mosquitto_pub`. The edge log should show
 //!      `"control written" key=control_lamp kind=register address=10 value=1`.
-//!   5. Restart the broker while the edge is running → the log should show
+//!   5. Restart the broker while the edge is running. The log should show
 //!      `"MQTT connected (ConnAck received)"` + `"control (re-)subscribed
 //!      after ConnAck"` without restarting edge-client.
-//!   6. `Ctrl+C` edge-client → wait ~60s (keepalive timeout) → the broker
+//!   6. `Ctrl+C` edge-client, wait ~60s (keepalive timeout), then the broker
 //!      publishes the LWT `{"status":"disconnected"}` to the primary machine's
 //!      heartbeat topic.
 
@@ -52,7 +52,7 @@ use edge_client::scale::{self, ScaleArgs};
 use edge_client::settings::Settings;
 use edge_client::{heartbeat, mqtt, plc_status, resource, telemetry, weigher};
 
-/// Edge agent. With no subcommand → run the agent (poll Modbus + publish MQTT).
+/// Edge agent. With no subcommand, runs the agent (poll Modbus + publish MQTT).
 #[derive(Parser)]
 #[command(name = "edge-client", version, about, long_about = None)]
 struct Cli {
@@ -68,7 +68,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Parse the CLI first — if there's a subcommand, handle it and exit without
+    // Parse the CLI first. If there's a subcommand, handle it and exit without
     // touching agent setup (dotenv / tracing / Settings).
     let cli = Cli::parse();
     if let Some(Command::Scale(args)) = cli.command {
@@ -78,11 +78,11 @@ async fn main() -> Result<()> {
 
     // Load `.env` BEFORE tracing init so `RUST_LOG` in the file is read by
     // `EnvFilter`. If called after init (e.g. from `Settings::from_env`), the
-    // filter is already baked with an empty env var → all logs are dropped.
+    // filter is already baked with an empty env var and all logs are dropped.
     dotenvy::dotenv().ok();
 
     // Fall back to `info` if `RUST_LOG` is still absent (e.g. the binary is run
-    // without a `.env` and without a shell export) — friendlier than total
+    // without a `.env` and without a shell export), which is better than total
     // silence.
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -111,7 +111,7 @@ async fn main() -> Result<()> {
         "edge-client configured"
     );
 
-    // Enumerate each device at startup — so every PLC/slave/weigher is visible
+    // Enumerate each device at startup so every PLC/slave/weigher is visible
     // in the log, not just the aggregate. Useful to verify multi-device parsing.
     for d in &settings.mapping.devices {
         use edge_client::shared::DeviceConnection;
@@ -151,7 +151,7 @@ async fn main() -> Result<()> {
     }
 
     // ---------------------------------------------------------------------------
-    // Modbus I/O — only built if there is a PLC in the mapping.
+    // Modbus I/O, only built if there is a PLC in the mapping.
     // If there isn't, the telemetry/control/plc_status tasks use pending()
     // (idle).
     // ---------------------------------------------------------------------------
@@ -248,7 +248,7 @@ async fn main() -> Result<()> {
             qos,
             plc_status_rx,
         ));
-        // Per-source-device plc_status publishers (additional PLC / slave) —
+        // Per-source-device plc_status publishers (additional PLC / slave),
         // detached; live for the lifetime of the process. Each has its own
         // machine_id.
         for (topic, rx) in source_status_pub {
@@ -302,7 +302,7 @@ async fn main() -> Result<()> {
         // Channel to forward MQTT cmd topics to the weigher serial write tasks.
         let (weigher_cmd_tx, weigher_cmd_rx) = tokio::sync::mpsc::channel::<(String, Vec<u8>)>(32);
 
-        // Weigher-only doesn't need inbox/connack — there's no control subscriber.
+        // Weigher-only doesn't need inbox/connack: there's no control subscriber.
         tokio::select! {
             _ = mqtt::drive_eventloop(eventloop, None, None, Some(weigher_cmd_tx)) => {
                 info!("MQTT event loop exited (unexpected)");

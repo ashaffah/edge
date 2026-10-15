@@ -2,14 +2,14 @@
 //! present) + the JSON mapping format (`example-mapping.json` with a `devices`
 //! array).
 //!
-//! Edge-client is **1 instance per machine**. Each deployment has its own
+//! Edge-client is 1 instance per machine. Each deployment has its own
 //! `.env` with MQTT credentials; the machine_id and Modbus connection come
 //! entirely from the JSON mapping (there are no `MACHINE_ID` / `MODBUS_*` env
 //! vars).
 //!
-//! Edge-client does no persistence at all — all data is sent to the MQTT broker
+//! Edge-client does no persistence at all. All data is sent to the MQTT broker
 //! and consumed on the other side. `CACHE_URL` / `CONTROL_GATE_KEY` are read for
-//! control-command gate authorization — see [`crate::control_gate`] for details.
+//! control-command gate authorization; see [`crate::control_gate`] for details.
 
 use anyhow::{Context, Result, bail};
 use std::{env, fs, path::Path, time::Duration};
@@ -26,7 +26,7 @@ pub struct Settings {
     pub base_topic: String,
     pub machine_id: String,
     pub mapping: DeviceMapping,
-    /// `None` if the mapping has no PLC device — this instance only manages
+    /// `None` if the mapping has no PLC device. This instance then only manages
     /// weigher scales (no Modbus polling/control).
     pub modbus: Option<ModbusSettings>,
     pub control_gate: ControlGateSettings,
@@ -75,13 +75,13 @@ pub enum Transport {
     /// Standard Modbus TCP (MBAP header). Default port 502. Ethernet PLC.
     Tcp { host: String, port: u16 },
     /// Modbus RTU frames (with CRC) encapsulated in plain TCP, without MBAP.
-    /// The default mode of RS-485↔Ethernet converters (Moxa NPort, USR-TCP232,
-    /// Waveshare, Elfin). RFC 2217 (Telnet-negotiated serial) is **not**
-    /// supported here — add a new variant later if needed.
+    /// The default mode of RS-485 to Ethernet converters (Moxa NPort, USR-TCP232,
+    /// Waveshare, Elfin). RFC 2217 (Telnet-negotiated serial) is not
+    /// supported here; add a new variant later if needed.
     RtuOverTcp { host: String, port: u16 },
     /// Modbus RTU directly to a serial port. Path = the device node
     /// (`/dev/ttyUSB0`, `/dev/ttyS0`, `COM3`, etc.). A USB-RS485 adapter appears
-    /// as a normal serial port via the CDC driver — no separate mode needed.
+    /// as a normal serial port via the CDC driver, no separate mode needed.
     RtuSerial {
         path: String,
         baud: u32,
@@ -92,7 +92,7 @@ pub enum Transport {
 }
 
 impl Transport {
-    /// Human-readable display for logs. Not parseable back — purely a debug aid.
+    /// Human-readable display for logs. Not parseable back, only a debug aid.
     pub fn display(&self) -> String {
         match self {
             Self::Tcp { host, port } => format!("tcp://{host}:{port}"),
@@ -128,7 +128,7 @@ pub enum SerialStopBits {
 }
 
 /// Data bits per character. Modbus RTU = always 8-bit. `Seven` is exposed only
-/// for odd legacy devices — should not be needed in typical deployments.
+/// for odd legacy devices. Should not be needed in typical deployments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SerialDataBits {
     Seven,
@@ -137,7 +137,7 @@ pub enum SerialDataBits {
 
 /// Gate authorization configuration for control commands.
 ///
-/// `url == None` → gate disabled, all control denied. Deliberately does not
+/// `url == None` means the gate is disabled and all control is denied. It does not
 /// auto-allow when empty: running without Valkey/Redis stays safe (no
 /// accidental writes).
 #[derive(Debug, Clone)]
@@ -176,7 +176,7 @@ impl Settings {
 
 /// Derive machine_id from the DeviceMapping.
 ///
-/// Priority: (1) PLC → (2) Slave → (3) Weigher.
+/// Priority: (1) PLC, (2) Slave, (3) Weigher.
 /// There must be at least one device entry for machine_id to be derivable.
 fn derive_machine_id(mapping: &DeviceMapping) -> Result<String> {
     // 1. First PLC
@@ -246,7 +246,7 @@ fn load_mqtt_settings() -> Result<MqttSettings> {
 }
 
 /// Load Modbus settings from the first PLC in the mapping.
-/// Returns `None` if there is no PLC device — weigher-only mode.
+/// Returns `None` if there is no PLC device (weigher-only mode).
 fn load_modbus_settings_opt(mapping: &DeviceMapping) -> Result<Option<ModbusSettings>> {
     let plc = match mapping
         .devices
@@ -315,7 +315,7 @@ pub(crate) fn device_conn_to_transport(
     }
 }
 /// Strip an inline comment from an env value. systemd `EnvironmentFile=` does
-/// not strip inline `#` (unlike dotenvy). "none  # comment" → "none".
+/// not strip inline `#` (unlike dotenvy). "none  # comment" becomes "none".
 fn strip_env_comment(s: &str) -> &str {
     s.split('#').next().unwrap_or("").trim()
 }
@@ -346,7 +346,7 @@ fn parse_data_bits_u8(v: u8) -> Result<SerialDataBits> {
 }
 
 /// Load gate config. Not fallible: missing/empty `CACHE_URL` = disabled (deny
-/// all). Does not validate the URL format here — leave that to
+/// all). Does not validate the URL format here; that is left to
 /// `redis::Client::open` in [`crate::control_gate::ControlGate::connect`] which
 /// reports a specific error.
 fn load_control_gate_settings() -> ControlGateSettings {
@@ -389,9 +389,9 @@ fn optional(name: &str, default: &str) -> String {
 }
 
 // ===========================================================================
-// Tests — pure parsing helpers. Env-driven loaders (load_modbus_settings,
+// Tests: pure parsing helpers. Env-driven loaders (load_modbus_settings,
 // load_mqtt_settings) are not tested here because `env::var` is process-global
-// and cargo tests run concurrently → races between tests. Smoke-tested manually.
+// and cargo tests run concurrently, which causes races between tests. Smoke-tested manually.
 // ===========================================================================
 
 #[cfg(test)]

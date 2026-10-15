@@ -1,6 +1,6 @@
 //! MQTT parameter mapping and its lookup index.
 //!
-//! Pure domain types — no I/O here. The file loader lives in `settings.rs`
+//! Pure domain types, no I/O here. The file loader lives in `settings.rs`
 //! (because it loads together with env).
 
 use anyhow::{Context, Result, bail};
@@ -16,7 +16,7 @@ use super::modbus::ByteOrder;
 /// on the next cycle (≤1 poll interval). The bridge must publish the written
 /// value to MQTT after the write so the dashboard stays in sync.
 ///
-/// The bridge task does **not** go through control_gate (automated write, not an
+/// The bridge task does not go through control_gate (automated write, not an
 /// operator). control_gate is only for the MQTT-triggered control subscriber.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,7 +28,7 @@ pub struct BridgeRule {
 }
 
 /// A reference to one parameter on one device.
-/// `device = "plc"` → the `sources["plc"]` entry (main PLC). Any other name → a
+/// `device = "plc"` refers to the `sources["plc"]` entry (main PLC). Any other name is a
 /// key in `sources`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,7 +38,7 @@ pub struct Endpoint {
 }
 
 /// The transform applied when the bridge copies a value.
-/// Currently only `passthrough` — extensible without a breaking change.
+/// Currently only `passthrough`. More can be added without a breaking change.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransformKind {
@@ -65,20 +65,20 @@ pub struct Param {
 // Modbus binding
 // ---------------------------------------------------------------------------
 
-/// Modbus binding per parameter — strictly one variant per Function Code.
+/// Modbus binding per parameter, strictly one variant per Function Code.
 /// `kind` in JSON directly states the FC used, without inferring it from
 /// context (monitoring/set/control category).
 ///
 /// Read variants (used in `monitoring[]`):
-/// - `read_coils`             → FC1, bulk read boolean bits from address 0
-/// - `read_discrete_inputs`   → FC2, targeted single-bit read (sensor/limit switch)
-/// - `read_holding_registers` → FC3, bulk read float/integer from address 0
-/// - `read_input_registers`   → FC4, targeted read (sparse address, e.g. chiller 1000)
+/// - `read_coils`: FC1, bulk read boolean bits from address 0
+/// - `read_discrete_inputs`: FC2, targeted single-bit read (sensor/limit switch)
+/// - `read_holding_registers`: FC3, bulk read float/integer from address 0
+/// - `read_input_registers`: FC4, targeted read (sparse address, e.g. chiller 1000)
 ///
 /// Write variants (used in `control[]` and `set[]`):
-/// - `write_single_coil`       → FC5, write 1 boolean bit to a coil
-/// - `write_single_register`   → FC6, write 1 16-bit register (on/off via an integer value)
-/// - `write_multiple_registers`→ FC16, write 2 registers (float32 or int32 setpoint)
+/// - `write_single_coil`: FC5, write 1 boolean bit to a coil
+/// - `write_single_register`: FC6, write 1 16-bit register (on/off via an integer value)
+/// - `write_multiple_registers`: FC16, write 2 registers (float32 or int32 setpoint)
 ///
 /// Example JSON:
 /// ```json
@@ -97,11 +97,11 @@ pub struct Param {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ModbusBinding {
-    /// FC1 — Read Coils. Bulk read boolean bits from address 0.
+    /// FC1, Read Coils. Bulk read boolean bits from address 0.
     ReadCoils { address: u16 },
-    /// FC2 — Read Discrete Inputs. Targeted single-bit read, read-only.
+    /// FC2, Read Discrete Inputs. Targeted single-bit read, read-only.
     ReadDiscreteInputs { address: u16 },
-    /// FC3 — Read Holding Registers. Bulk read 2 registers (f32/i32) from address 0.
+    /// FC3, Read Holding Registers. Bulk read 2 registers (f32/i32) from address 0.
     ReadHoldingRegisters {
         address: u16,
         #[serde(default)]
@@ -109,7 +109,7 @@ pub enum ModbusBinding {
         #[serde(default)]
         scale: Option<f64>,
     },
-    /// FC4 — Read Input Registers. Targeted read, address can be sparse.
+    /// FC4, Read Input Registers. Targeted read, address can be sparse.
     /// `scale`: optional multiplier (e.g. 0.1 for chiller raw×0.1=°C).
     ReadInputRegisters {
         address: u16,
@@ -118,9 +118,9 @@ pub enum ModbusBinding {
         #[serde(default)]
         scale: Option<f64>,
     },
-    /// FC5 — Write Single Coil. Write 1 boolean bit.
+    /// FC5, Write Single Coil. Write 1 boolean bit.
     WriteSingleCoil { address: u16 },
-    /// FC6 — Write Single Register. Write 1 16-bit register.
+    /// FC6, Write Single Register. Write 1 16-bit register.
     /// `on_value`: the value when payload=true. `off_value`: the value when
     /// payload=false (default 0 if absent).
     WriteSingleRegister {
@@ -129,7 +129,7 @@ pub enum ModbusBinding {
         #[serde(default)]
         off_value: Option<u16>,
     },
-    /// FC16 — Write Multiple Registers. Write 2 registers for a float32/int32 setpoint.
+    /// FC16, Write Multiple Registers. Write 2 registers for a float32/int32 setpoint.
     WriteMultipleRegisters {
         address: u16,
         #[serde(default)]
@@ -178,7 +178,7 @@ pub enum DataType {
     Float,
     Integer,
     Boolean,
-    /// Raw string passthrough — no conversion. Used for parameters whose value
+    /// Raw string passthrough, no conversion. Used for parameters whose value
     /// is not numeric, e.g. a scale unit ("kg", "g", "lb"). Cannot be used as
     /// set/control.
     String,
@@ -261,9 +261,9 @@ pub struct TopicIndex {
 impl TopicIndex {
     /// Build the index for edge-client from a `DeviceMapping`.
     ///
-    /// The **primary PLC** (first PLC in the array) gets `device = None` — used
+    /// The primary PLC (first PLC in the array) gets `device = None`, used
     /// by the main bulk read loop in telemetry.
-    /// **Additional PLCs** (second, etc.) get `device = Some(device_id)` — polled
+    /// Additional PLCs (second, etc.) get `device = Some(device_id)` and are polled
     /// as independent source sessions, allowing a different TCP connection (e.g.
     /// a different port for read vs write on Siemens).
     /// Slaves get `device = Some(device_id)`.
@@ -412,14 +412,14 @@ mod tests {
 
     #[test]
     fn parse_string_passthrough() {
-        // DataType::String does not convert — the value is returned as-is.
+        // DataType::String does not convert; the value is returned as-is.
         let v = DataType::String.parse("kg").unwrap();
         assert!(matches!(v, TypedValue::String(ref s) if s == "kg"));
 
         let v2 = DataType::String.parse("  lb  ").unwrap();
         assert!(matches!(v2, TypedValue::String(ref s) if s == "lb")); // trim applied
 
-        // String accepts any input, including numbers — not parsed as numeric
+        // String accepts any input, including numbers; it is not parsed as numeric
         let v3 = DataType::String.parse("123.45").unwrap();
         assert!(matches!(v3, TypedValue::String(ref s) if s == "123.45"));
     }
@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn param_without_modbus_deserializes_as_none() {
-        // A Param without a "modbus" field → modbus = None (most params).
+        // A Param without a "modbus" field gets modbus = None (most params).
         let json = r#"{
             "key": "actual_pressure",
             "label": "Actual Pressure",
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn write_single_register_off_value_optional() {
-        // off_value absent → None (caller defaults to 0).
+        // off_value absent gives None (caller defaults to 0).
         let json = r#"{
             "key": "control_valve_up", "label": "Valve Open", "topic": "control/valve/up",
             "type": "boolean",
@@ -605,7 +605,7 @@ mod tests {
 //
 // The edge-client mapping format: a `devices` array with a per-device
 // connection. `TopicIndex::from_device_mapping` indexes every parameter for
-// topic → entry lookup. The primary PLC gets device=None (main bulk read loop),
+// Topic to entry lookup. The primary PLC gets device=None (main bulk read loop),
 // additional PLC / slave / weigher get device=Some(device_id).
 // ===========================================================================
 
@@ -618,7 +618,7 @@ pub struct DeviceMapping {
     #[serde(default)]
     pub poll_interval_ms: Option<u64>,
     /// All devices: PLC, Modbus slaves, and weigher scales.
-    /// Optional — may be empty (e.g. a mapping that only contains weighers).
+    /// Optional. May be empty (e.g. a mapping that only contains weighers).
     #[serde(default)]
     pub devices: Vec<DeviceEntry>,
     #[serde(default)]
@@ -634,7 +634,7 @@ pub struct DeviceEntry {
     pub location: String,
     pub name: String,
     pub connection: DeviceConnection,
-    /// Parser config — required for `device_type: "weigher"`, absent for PLC/slave.
+    /// Parser config. Required for `device_type: "weigher"`, absent for PLC/slave.
     #[serde(default)]
     pub parser: Option<WeigherParser>,
     #[serde(default)]
@@ -644,7 +644,7 @@ pub struct DeviceEntry {
     #[serde(default)]
     pub control: Vec<Param>,
     /// Serial commands triggered from MQTT (only for `device_type: "weigher"`).
-    /// The operator publishes to `{base_topic}/{location}/{name}/cmd/{key}` →
+    /// The operator publishes to `{base_topic}/{location}/{name}/cmd/{key}`, then
     /// edge-client writes `serial_cmd` to the scale's serial port.
     #[serde(default)]
     pub commands: Vec<WeigherCommand>,
@@ -654,7 +654,7 @@ pub struct DeviceEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceType {
-    /// Master device — determines the `machine_id` and the main Modbus transport.
+    /// Master device: determines the `machine_id` and the main Modbus transport.
     Master,
     /// Additional Modbus slave (RS-485, chiller, sensor panel, etc.).
     Slave,
@@ -681,11 +681,11 @@ fn default_data_bits_u8() -> u8 {
 
 /// Parser config for a serial-ASCII weigher scale.
 ///
-/// The regex uses **named capture groups** `(?P<name>...)` — the group name must
+/// The regex uses named capture groups `(?P<name>...)`. The group name must
 /// match a `key` field in `monitoring`. Edge-client iterates over all monitoring
 /// entries, looks up the capture group named = key, and publishes its value.
 ///
-/// `byte_map` is applied before ASCII decoding — suited to brands that encode
+/// `byte_map` is applied before ASCII decoding, for brands that encode
 /// digits as non-standard bytes (e.g. GSC: 0xB0–0xB9 = digits '0'–'9').
 /// Leave the array empty if the brand uses standard ASCII.
 ///
@@ -720,9 +720,9 @@ pub struct WeigherParser {
     /// Optional: if set, publish all capture groups as JSON to this topic in
     /// addition to the usual per-key publishing.
     /// Full topic: `{base_topic}/{location}/{name}/{raw_topic}`.
-    /// Payload: `{"weight": 12.50, "unit": "kg"}` — numeric values are parsed to
+    /// Payload: `{"weight": 12.50, "unit": "kg"}`. Numeric values are parsed to
     /// numbers, the rest stay strings.
-    /// Example: `"raw_topic": "raw"` → publishes to `.../scale_gsc/raw`
+    /// Example: `"raw_topic": "raw"` publishes to `.../scale_gsc/raw`
     #[serde(default)]
     pub raw_topic: Option<String>,
     /// Optional stability gate: only publish a line when the scale reports a
@@ -742,7 +742,7 @@ pub struct WeigherParser {
 
 /// Stability gate for a weigher: publish a reading only when the scale reports a
 /// stable measurement (not in motion). Many scales emit a status token like
-/// `ST` (stable) vs `US`/`MO` (motion) at the start of each line — capture it in
+/// `ST` (stable) vs `US`/`MO` (motion) at the start of each line. Capture it in
 /// `regex` and point this rule at that group.
 ///
 /// Example: `regex` `"(?P<st>ST|US),\\s*(?P<weight>[0-9.]+)"` with
@@ -757,7 +757,7 @@ pub struct StableRule {
 }
 
 /// One byte-substitution rule: replace a byte valued `from` with `to`.
-/// Decimal values (JSON has no hex literal — 0xB0 = 176, 0x30='0' = 48).
+/// Decimal values (JSON has no hex literal: 0xB0 = 176, 0x30='0' = 48).
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct ByteMapEntry {
     pub from: u8,
@@ -766,7 +766,7 @@ pub struct ByteMapEntry {
 
 /// A serial command that can be sent to the scale from MQTT.
 ///
-/// The operator publishes to `{base_topic}/{location}/{name}/cmd/{key}` →
+/// The operator publishes to `{base_topic}/{location}/{name}/cmd/{key}`, then
 /// edge-client writes `serial_cmd` to the scale's serial port.
 ///
 /// `serial_cmd` supports escape sequences: `\r` `\n` `\t` `\\` `\xNN`.
@@ -779,7 +779,7 @@ pub struct ByteMapEntry {
 /// ```
 #[derive(Debug, Clone, Deserialize)]
 pub struct WeigherCommand {
-    /// Command ID — becomes part of the topic: `cmd/{key}`.
+    /// Command ID, used in the topic as `cmd/{key}`.
     pub key: String,
     /// Bytes written to the serial port. Escapes: `\r` `\n` `\t` `\\` `\xNN`.
     pub serial_cmd: String,
@@ -809,7 +809,7 @@ pub enum DeviceConnection {
         #[serde(default = "default_data_bits_u8")]
         data_bits: u8,
     },
-    /// Serial ASCII — for weigher scales. Does not use the Modbus protocol.
+    /// Serial ASCII, for weigher scales. Does not use the Modbus protocol.
     /// Reads text lines, parsed via `WeigherParser.regex`.
     SerialAscii {
         path: String,
@@ -826,7 +826,7 @@ pub enum DeviceConnection {
 
 impl DeviceConnection {
     /// Get the unit_id from a Modbus connection.
-    /// Only valid for `Tcp` and `RtuSerial` — must not be called for `SerialAscii`.
+    /// Only valid for `Tcp` and `RtuSerial`; must not be called for `SerialAscii`.
     pub fn unit_id(&self) -> u8 {
         match self {
             Self::Tcp { unit_id, .. } | Self::RtuSerial { unit_id, .. } => *unit_id,
@@ -996,7 +996,7 @@ mod device_mapping_tests {
 
     #[test]
     fn weigher_device_in_devices_array_deserializes() {
-        // A weigher is expressed as an entry in `devices` — not a separate array.
+        // A weigher is an entry in `devices`, not a separate array.
         let json = r#"{
             "base_topic": "acme/site",
             "devices": [

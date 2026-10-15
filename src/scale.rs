@@ -1,4 +1,4 @@
-//! scale — diagnose scale serial output (GSC, Fujitsu, Mettler, etc.)
+//! scale: diagnose scale serial output (GSC, Fujitsu, Mettler, etc.)
 //!
 //! Run as an edge-client subcommand:
 //!   edge-client scale                           # pick a port interactively from the list
@@ -10,9 +10,9 @@
 //!   edge-client scale --list                    # show all COM ports then exit
 //!
 //! Each output line: `HEX  |  printable-ASCII`
-//!   - Readable text          → baud rate correct
-//!   - Random/garbled chars   → wrong baud rate
-//!   - Non-ASCII bytes (dots)  → the scale uses a custom encoding (e.g. GSC 0xB0-0xB9)
+//!   - Readable text: baud rate correct
+//!   - Random/garbled chars: wrong baud rate
+//!   - Non-ASCII bytes (dots): the scale uses a custom encoding (e.g. GSC 0xB0-0xB9)
 
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -45,7 +45,7 @@ pub struct ScaleArgs {
     duration: Option<f64>,
 
     /// Bytes to send to the scale before starting to read.
-    /// Escape sequences: \\r \\n \\t \\xNN — example: "T\\r\\n" for tare
+    /// Escape sequences: \\r \\n \\t \\xNN. Example: "T\\r\\n" for tare
     #[arg(long, default_value = "")]
     send: String,
 
@@ -137,7 +137,7 @@ fn list_ports() {
 }
 
 // ---------------------------------------------------------------------------
-// Interactive port picker — shown when --port is omitted
+// Interactive port picker, shown when --port is omitted
 // ---------------------------------------------------------------------------
 
 fn select_port() -> Option<String> {
@@ -176,7 +176,7 @@ fn select_port() -> Option<String> {
 
         let trimmed = input.trim();
 
-        // Enter with no input → use the first port as the default
+        // Enter with no input: use the first port as the default
         if trimmed.is_empty() {
             let port = &ports[0];
             println!("→ {}", port.port_name);
@@ -240,21 +240,21 @@ async fn listen(port: &str, baud: u32, duration: Option<f64>, send_cmd: Option<&
             break;
         }
 
-        // Read with a 100ms timeout — so we can check the deadline
+        // Read with a 100ms timeout so we can check the deadline
         let read_result =
             tokio::time::timeout(Duration::from_millis(100), serial.read(&mut chunk)).await;
 
         let n = match read_result {
             Ok(Ok(0)) => break, // EOF
             Ok(Ok(n)) => n,
-            Ok(Err(_)) | Err(_) => continue, // timeout or read error → try again
+            Ok(Err(_)) | Err(_) => continue, // timeout or read error, try again
         };
 
         total += n;
         buf.extend_from_slice(&chunk[..n]);
 
-        // Flush at line boundaries — check \r\n first, then \n, then \r
-        // (order matters: \r\n must be treated as ONE terminator)
+        // Flush at line boundaries: check \r\n first, then \n, then \r
+        // (order matters: \r\n must be treated as one terminator)
         for term in [b"\r\n".as_slice(), b"\n", b"\r"] {
             while let Some(pos) = buf.windows(term.len()).position(|w| w == term) {
                 let line = buf[..pos].to_vec();
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn format_chunk_non_ascii() {
-        // 0xB0 is not printable → shown as a dot
+        // 0xB0 is not printable, so it is shown as a dot
         let data = &[b'G', b'S', 0xB0, 0xB1, b'.', b'5', b'0'];
         let out = format_chunk(data);
         assert!(out.contains("..")); // 0xB0 and 0xB1 become dots

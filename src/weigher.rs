@@ -1,10 +1,10 @@
 //! Weigher scale publisher + command writer.
 //!
-//! **Read path** (continuous): read ASCII lines from serial, parse via regex,
+//! Read path (continuous): read ASCII lines from serial, parse via regex,
 //! publish each key to MQTT. Optional: combined JSON to `raw_topic`.
 //!
-//! **Write path** (optional): the operator publishes to
-//! `{base_topic}/{location}/{name}/cmd/{key}` → edge-client writes `serial_cmd`
+//! Write path (optional): the operator publishes to
+//! `{base_topic}/{location}/{name}/cmd/{key}`, then edge-client writes `serial_cmd`
 //! to the scale's serial port (tare, zero, print, etc.).
 //!
 //! Weigher with commands:
@@ -30,13 +30,13 @@ use tracing::{debug, info, warn};
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 
 /// Upper bound on a single serial line. A stream that never sends a terminator
-/// can't grow the line buffer past this — bytes beyond it are dropped until the
+/// can't grow the line buffer past this. Bytes beyond it are dropped until the
 /// next `\r`/`\n`. Real scale lines are well under this.
 const MAX_LINE_LEN: usize = 1024;
 
 /// Run all weigher loops concurrently.
 ///
-/// `cmd_inbox` — channel from main.rs to receive MQTT command messages
+/// `cmd_inbox`: channel from main.rs to receive MQTT command messages
 /// (`topic`, `payload`). Only used if there is a weigher with `commands`.
 pub async fn run(
     client: AsyncClient,
@@ -55,8 +55,8 @@ pub async fn run(
         return;
     }
 
-    // Build: topic_cmd → (device_id, serial_bytes)
-    // and: device_id → per-device write channel sender
+    // Build: topic_cmd to (device_id, serial_bytes)
+    // and: device_id to per-device write channel sender
     let mut topic_to_cmd: HashMap<String, Vec<u8>> = HashMap::new();
     let mut topic_to_sender: HashMap<String, mpsc::Sender<Vec<u8>>> = HashMap::new();
 
@@ -111,10 +111,10 @@ pub async fn run(
 /// Read bytes from the reader until `\r`, `\n`, or `\r\n` is found.
 ///
 /// Follows the same logic as the `scale` subcommand:
-///   check order `\r\n` → `\n` → `\r` — so `\r\n` is treated as ONE terminator,
+///   check order `\r\n`, then `\n`, then `\r`, so `\r\n` is treated as one terminator,
 ///   not two.
 ///
-/// The terminator is **not included** in `buf` — `buf` only holds clean data.
+/// The terminator is not included in `buf`; `buf` only holds clean data.
 async fn read_line_any(
     reader: &mut (impl AsyncBufRead + Unpin),
     buf: &mut Vec<u8>,
@@ -130,7 +130,7 @@ async fn read_line_any(
             consumed += 1;
             if b == b'\r' {
                 reader.consume(consumed);
-                // Peek the next byte — if \n, consume it too (\r\n = one terminator)
+                // Peek the next byte. If \n, consume it too (\r\n = one terminator)
                 let next = reader.fill_buf().await?;
                 if next.first() == Some(&b'\n') {
                     reader.consume(1);
@@ -143,7 +143,7 @@ async fn read_line_any(
                 buf.push(b);
                 n += 1;
             }
-            // else: line exceeds MAX_LINE_LEN — keep scanning for a terminator
+            // else: line exceeds MAX_LINE_LEN. Keep scanning for a terminator
             // but stop buffering, so memory stays bounded.
         }
         reader.consume(consumed);
@@ -166,7 +166,7 @@ async fn read_line_with_timeout(
 
 /// True when the stability gate is satisfied: the capture group `rule.group`
 /// exists and its trimmed value equals `rule.equals`. A missing group returns
-/// false — we can't confirm the reading is stable, so we don't publish it.
+/// false: we can't confirm the reading is stable, so we don't publish it.
 fn caps_is_stable(caps: &Captures, rule: &StableRule) -> bool {
     caps.name(&rule.group)
         .map(|m| m.as_str().trim() == rule.equals)
@@ -214,7 +214,7 @@ async fn run_one(
         .as_deref()
         .map(|s| format!("{}/{}/{}/{}", base_topic, device.location, device.name, s));
 
-    // Pre-allocate a map for raw_topic publishing — reused per line,
+    // Pre-allocate a map for raw_topic publishing. Reused per line;
     // clear() is cheaper than Map::new() which allocates a new HashMap.
     let mut raw_map = serde_json::Map::new();
 
@@ -273,7 +273,7 @@ async fn run_one(
         loop {
             buf.clear();
             tokio::select! {
-                // Read a line from serial — handle \r, \n, or \r\n
+                // Read a line from serial, handling \r, \n, or \r\n
                 result = read_line_with_timeout(&mut reader, &mut buf, read_timeout) => {
                     match result {
                         Err(_elapsed) => {
@@ -340,12 +340,12 @@ async fn run_one(
                     }
                 }
 
-                // Receive a command from MQTT → write to serial
+                // Receive a command from MQTT and write it to serial
                 Some(cmd_bytes) = write_rx.recv() => {
                     debug!(device_id = %device.device_id, bytes = ?cmd_bytes, "writing cmd to serial");
                     if let Err(e) = write_half.write_all(&cmd_bytes).await {
                         warn!(device_id = %device.device_id, "serial write error: {e:#}");
-                        // Don't break — a serial read error is what triggers reopen
+                        // Don't break. A serial read error is what triggers reopen
                     }
                 }
             }
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn parse_cmd_mixed() {
-        // "R\r\n" → [b'R', b'\r', b'\n']
+        // "R\r\n" parses to [b'R', b'\r', b'\n']
         let result = parse_serial_cmd("R\\r\\n");
         assert_eq!(result, b"R\r\n");
     }
@@ -460,8 +460,8 @@ mod tests {
 
     #[test]
     fn stable_gate_denies_when_group_absent() {
-        // The stability group isn't present in the match → cannot confirm
-        // stability, so deny (don't publish).
+        // The stability group isn't present in the match, so we cannot confirm
+        // stability. Deny (don't publish).
         let re = Regex::new(r"(?P<weight>[0-9.]+)").unwrap();
         let rule = StableRule {
             group: "st".into(),
