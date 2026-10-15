@@ -22,6 +22,7 @@ sebagai service systemd yang hidup terus-menerus.
   - [Binding Modbus](#binding-modbus)
   - [Byte order](#byte-order)
   - [Parser weigher & command](#parser-weigher--command)
+  - [Catatan timbangan](#catatan-timbangan)
   - [Aturan bridge](#aturan-bridge)
 - [Tata letak topic MQTT](#tata-letak-topic-mqtt)
 - [Control gate](#control-gate)
@@ -258,6 +259,135 @@ dari MQTT. Publish ke `{base}/{location}/{name}/cmd/{key}` menulis byte
   { "key": "tare",  "serial_cmd": "T\\r\\n" },
   { "key": "zero",  "serial_cmd": "Z\\r\\n" },
   { "key": "print", "serial_cmd": "P\\r\\n" }
+]
+```
+
+### Catatan timbangan
+
+Pengaturan untuk timbangan di ruang timbang. Semuanya device `weigher` dengan
+koneksi `serial_ascii`, tanpa Modbus. Blok `connection` berbeda per brand, jadi
+jangan disalin ke timbangan lain tanpa dicek dulu.
+
+#### GSC
+
+- Serial: 9600 baud, 7 data bits, no parity, 1 stop bit.
+- Digit dikirim sebagai byte `0xB0` sampai `0xB9`, bukan ASCII `'0'` sampai
+  `'9'`, jadi `byte_map` memetakan byte 176 sampai 185 ke 48 sampai 57.
+- Regex punya group `st` opsional untuk token status `ST`/`US`. Nilainya ikut
+  ter-publish di JSON `raw`, tapi tidak ada aturan `stable`, jadi baris yang
+  masih bergerak tetap di-publish.
+- Command diakhiri CR LF: `T` untuk tare, `Z` untuk zero, `P` untuk print.
+
+```jsonc
+"connection": { "type": "serial_ascii", "path": "COM3",
+  "baud": 9600, "parity": "none", "stop_bits": 1, "data_bits": 7 },
+"parser": {
+  "regex": "(?:(?P<st>ST|US)\\D*?)?(?P<weight>[-+]?[0-9]+\\.[0-9]+)(?P<unit>[A-Za-z]*)",
+  "byte_map": [
+    { "from": 176, "to": 48 }, { "from": 177, "to": 49 },
+    { "from": 178, "to": 50 }, { "from": 179, "to": 51 },
+    { "from": 180, "to": 52 }, { "from": 181, "to": 53 },
+    { "from": 182, "to": 54 }, { "from": 183, "to": 55 },
+    { "from": 184, "to": 56 }, { "from": 185, "to": 57 }
+  ],
+  "raw_topic": "raw"
+},
+"commands": [
+  { "key": "tare",  "serial_cmd": "T\\r\\n" },
+  { "key": "zero",  "serial_cmd": "Z\\r\\n" },
+  { "key": "print", "serial_cmd": "P\\r\\n" }
+]
+```
+
+#### Fujitsu (timbangan analitik)
+
+- Serial: 9600 baud, 8 data bits, no parity, 1 stop bit.
+- Output ASCII standar, jadi `byte_map` dikosongkan.
+- Tiap pembacaan berupa record multi-baris, satu field per baris: `TTYPE`, `ID`,
+  `DATE`, `TIME`, `TEMP`, `BAT`, `MODE`, `REF`, `STATUS`, `STEP`, `TARE`,
+  `ZERO`, `WT`. Baris berat berbentuk `WT:0.00g`, atau `WT:-0.12g` setelah tare.
+  Satuannya gram.
+- Parser bekerja per baris, jadi regex di-anchor ke `WT:`. Tanpa itu, baris
+  seperti `TEMP:25.9C`, `BAT:7.1V` atau `REF:2000.00g` ikut ter-capture sebagai
+  berat. `[-+]?` wajib ada, kalau tidak pembacaan negatif tidak match dan hilang
+  tanpa peringatan.
+- Aturan `stable` tidak bisa dipakai: `STATUS:STEADY` ada di baris yang berbeda
+  dari `WT:`, jadi group status tidak pernah match di baris berat dan semua baris
+  akan ditolak. Semua pembacaan di-publish.
+- Command diakhiri CR LF: `T` untuk tare, `Z` untuk zero, `P` untuk print.
+
+```jsonc
+"connection": { "type": "serial_ascii", "path": "/dev/ttyUSB0",
+  "baud": 9600, "parity": "none", "stop_bits": 1, "data_bits": 8 },
+"parser": {
+  "regex": "WT:\\s*(?P<weight>[-+]?[0-9.]+)\\s*(?P<unit>\\D+)",
+  "byte_map": [],
+  "raw_topic": "raw"
+},
+"commands": [
+  { "key": "tare",  "serial_cmd": "T\\r\\n" },
+  { "key": "zero",  "serial_cmd": "Z\\r\\n" },
+  { "key": "print", "serial_cmd": "P\\r\\n" }
+]
+```
+
+#### Radwag WLC/C2 (60 kg)
+
+- Serial: 9600 baud, 8 data bits, no parity, 1 stop bit (default RS232 Radwag).
+- Output ASCII standar, jadi `byte_map` dikosongkan.
+- Regex sudah dicek langsung ke timbangan. Regex tidak di-anchor dan mengambil
+  angka pertama (bulat atau desimal) yang diikuti satuan di posisi mana pun pada
+  baris.
+- Tidak ada aturan `stable`, jadi baris yang masih bergerak (ditandai `?`, `^`
+  atau `v` oleh timbangan) ikut di-publish bersama baris yang stabil.
+- Command diakhiri CR LF: `T` untuk tare, `Z` untuk zero, dan `print` mengirim
+  `S` (command Radwag "send stable result").
+
+```jsonc
+"connection": { "type": "serial_ascii", "path": "COM4",
+  "baud": 9600, "parity": "none", "stop_bits": 1, "data_bits": 8 },
+"parser": {
+  "regex": "(?P<weight>[-+]?\\d+(?:\\.\\d+)?)\\s*(?P<unit>[A-Za-z]+)",
+  "byte_map": [],
+  "raw_topic": "raw"
+},
+"commands": [
+  { "key": "tare",  "serial_cmd": "T\\r\\n" },
+  { "key": "zero",  "serial_cmd": "Z\\r\\n" },
+  { "key": "print", "serial_cmd": "S\\r\\n" }
+]
+```
+
+#### Gewinn XK3118T1
+
+- Dibaca dari port DB9 RS232 indikator, yang terpisah dari port loadcell.
+- Serial: 2400 baud, 8 data bits, no parity, 1 stop bit. Baud rate dikonfirmasi
+  dengan Web Serial test tool.
+- Indikator berjalan di mode komunikasi `Co 3`: stream kontinu berisi berat net
+  dan satuan, sekitar 7.8 frame per detik, resolusi 0.02 kg, tiap frame diakhiri
+  CR LF. Frame berbentuk `=0000.14(kg)`, nilai negatif seperti `=-000.06(kg)`.
+  Regex melewati `(` di antara angka dan satuan.
+- Frame `Co 3` tidak membawa flag stabil, jadi aturan `stable` tidak bisa
+  dipakai. Deteksi stabil (window plus toleransi) belum diimplementasi.
+- Command: manual XK3118T1 menyebut tare sebagai `STX E ETX` dan zero sebagai
+  `STX D ETX`, untuk mode `Co 5` (command-response). Saat dites di `Co 3`,
+  indikator tidak membalas dan stream tidak berubah. Mode `Co 5` belum dites.
+- Manual tidak punya command print lewat serial. Print terikat ke tombol fisik
+  akumulasi dan hanya keluar di mode `Co 6` saat tombol TOTAL ditekan. Command
+  `print` dibiarkan dengan `serial_cmd` kosong sampai dikonfirmasi di device.
+
+```jsonc
+"connection": { "type": "serial_ascii", "path": "COM4",
+  "baud": 2400, "parity": "none", "stop_bits": 1, "data_bits": 8 },
+"parser": {
+  "regex": "(?P<weight>[-+]?\\d+\\.\\d+)\\D*?(?P<unit>[A-Za-z]+)",
+  "byte_map": [],
+  "raw_topic": "raw"
+},
+"commands": [
+  { "key": "tare",  "serial_cmd": "\\x02E\\x03" }, // tidak berefek di Co 3
+  { "key": "zero",  "serial_cmd": "\\x02D\\x03" }, // tidak berefek di Co 3
+  { "key": "print", "serial_cmd": "" }             // belum tervalidasi
 ]
 ```
 

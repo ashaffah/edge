@@ -22,6 +22,7 @@ long-lived systemd service.
   - [Modbus bindings](#modbus-bindings)
   - [Byte order](#byte-order)
   - [Weigher parser & commands](#weigher-parser--commands)
+  - [Scale notes](#scale-notes)
   - [Bridge rules](#bridge-rules)
 - [MQTT topic layout](#mqtt-topic-layout)
 - [Control gate](#control-gate)
@@ -256,6 +257,137 @@ Publishing to `{base}/{location}/{name}/cmd/{key}` writes the command's
   { "key": "tare",  "serial_cmd": "T\\r\\n" },
   { "key": "zero",  "serial_cmd": "Z\\r\\n" },
   { "key": "print", "serial_cmd": "P\\r\\n" }
+]
+```
+
+### Scale notes
+
+Settings used for the scales in the weighing room. All of them are `weigher`
+devices with a `serial_ascii` connection and no Modbus. The `connection` blocks
+differ per brand, so do not copy one to another scale without checking.
+
+#### GSC
+
+- Serial: 9600 baud, 7 data bits, no parity, 1 stop bit.
+- Digits are sent as bytes `0xB0` to `0xB9` instead of ASCII `'0'` to `'9'`, so
+  `byte_map` maps bytes 176 to 185 onto 48 to 57.
+- The regex has an optional `st` group for the `ST`/`US` status token. It is
+  published in the `raw` JSON, but no `stable` rule is set, so in-motion lines
+  are published too.
+- Commands end with CR LF: `T` tares, `Z` zeroes, `P` prints.
+
+```jsonc
+"connection": { "type": "serial_ascii", "path": "COM3",
+  "baud": 9600, "parity": "none", "stop_bits": 1, "data_bits": 7 },
+"parser": {
+  "regex": "(?:(?P<st>ST|US)\\D*?)?(?P<weight>[-+]?[0-9]+\\.[0-9]+)(?P<unit>[A-Za-z]*)",
+  "byte_map": [
+    { "from": 176, "to": 48 }, { "from": 177, "to": 49 },
+    { "from": 178, "to": 50 }, { "from": 179, "to": 51 },
+    { "from": 180, "to": 52 }, { "from": 181, "to": 53 },
+    { "from": 182, "to": 54 }, { "from": 183, "to": 55 },
+    { "from": 184, "to": 56 }, { "from": 185, "to": 57 }
+  ],
+  "raw_topic": "raw"
+},
+"commands": [
+  { "key": "tare",  "serial_cmd": "T\\r\\n" },
+  { "key": "zero",  "serial_cmd": "Z\\r\\n" },
+  { "key": "print", "serial_cmd": "P\\r\\n" }
+]
+```
+
+#### Fujitsu (analytical balance)
+
+- Serial: 9600 baud, 8 data bits, no parity, 1 stop bit.
+- Output is standard ASCII, so `byte_map` stays empty.
+- Each reading is a multi-line record with one field per line: `TTYPE`, `ID`,
+  `DATE`, `TIME`, `TEMP`, `BAT`, `MODE`, `REF`, `STATUS`, `STEP`, `TARE`,
+  `ZERO`, `WT`. The weight line looks like `WT:0.00g`, or `WT:-0.12g` after a
+  tare. The unit is grams.
+- The parser works per line, so the regex is anchored on `WT:`. Without it,
+  lines such as `TEMP:25.9C`, `BAT:7.1V` or `REF:2000.00g` are captured as weight
+  too. `[-+]?` is needed, otherwise negative readings do not match and are
+  dropped without a warning.
+- The `stable` rule cannot be used: `STATUS:STEADY` is on a different line from
+  `WT:`, so the status group never matches the weight line and every line would
+  be rejected. All readings are published.
+- Commands end with CR LF: `T` tares, `Z` zeroes, `P` prints.
+
+```jsonc
+"connection": { "type": "serial_ascii", "path": "/dev/ttyUSB0",
+  "baud": 9600, "parity": "none", "stop_bits": 1, "data_bits": 8 },
+"parser": {
+  "regex": "WT:\\s*(?P<weight>[-+]?[0-9.]+)\\s*(?P<unit>\\D+)",
+  "byte_map": [],
+  "raw_topic": "raw"
+},
+"commands": [
+  { "key": "tare",  "serial_cmd": "T\\r\\n" },
+  { "key": "zero",  "serial_cmd": "Z\\r\\n" },
+  { "key": "print", "serial_cmd": "P\\r\\n" }
+]
+```
+
+#### Radwag WLC/C2 (60 kg)
+
+- Serial: 9600 baud, 8 data bits, no parity, 1 stop bit (Radwag RS232 default).
+- Output is standard ASCII, so `byte_map` stays empty.
+- The regex was checked against the scale. It is not anchored and takes the
+  first number (integer or decimal) followed by a unit anywhere in the line.
+- There is no `stable` rule, so in-motion lines (marked `?`, `^` or `v` by the
+  scale) are published together with stable ones.
+- Commands end with CR LF: `T` tares, `Z` zeroes, and `print` sends `S` (Radwag's
+  "send stable result" command).
+
+```jsonc
+"connection": { "type": "serial_ascii", "path": "COM4",
+  "baud": 9600, "parity": "none", "stop_bits": 1, "data_bits": 8 },
+"parser": {
+  "regex": "(?P<weight>[-+]?\\d+(?:\\.\\d+)?)\\s*(?P<unit>[A-Za-z]+)",
+  "byte_map": [],
+  "raw_topic": "raw"
+},
+"commands": [
+  { "key": "tare",  "serial_cmd": "T\\r\\n" },
+  { "key": "zero",  "serial_cmd": "Z\\r\\n" },
+  { "key": "print", "serial_cmd": "S\\r\\n" }
+]
+```
+
+#### Gewinn XK3118T1
+
+- Read from the indicator's DB9 RS232 port, which is separate from the load
+  cell port.
+- Serial: 2400 baud, 8 data bits, no parity, 1 stop bit. The baud rate was
+  confirmed with a Web Serial test tool.
+- The indicator runs in communication mode `Co 3`: a continuous stream of net
+  weight and unit, about 7.8 frames per second, resolution 0.02 kg, each frame
+  ending with CR LF. A frame looks like `=0000.14(kg)`, a negative one like
+  `=-000.06(kg)`. The regex skips the `(` between the number and the unit.
+- `Co 3` frames have no stable flag, so the `stable` rule cannot be used.
+  Stable detection (window plus tolerance) is not implemented.
+- Commands: the XK3118T1 manual lists tare as `STX E ETX` and zero as
+  `STX D ETX`, for mode `Co 5` (command-response). Tested in `Co 3`, the
+  indicator does not reply and the stream does not change. `Co 5` has not been
+  tested.
+- The manual has no serial print command. Print is tied to the physical
+  accumulate key and only outputs in mode `Co 6` when TOTAL is pressed. The
+  `print` command is kept with an empty `serial_cmd` until this is confirmed on
+  the device.
+
+```jsonc
+"connection": { "type": "serial_ascii", "path": "COM4",
+  "baud": 2400, "parity": "none", "stop_bits": 1, "data_bits": 8 },
+"parser": {
+  "regex": "(?P<weight>[-+]?\\d+\\.\\d+)\\D*?(?P<unit>[A-Za-z]+)",
+  "byte_map": [],
+  "raw_topic": "raw"
+},
+"commands": [
+  { "key": "tare",  "serial_cmd": "\\x02E\\x03" }, // no effect in Co 3
+  { "key": "zero",  "serial_cmd": "\\x02D\\x03" }, // no effect in Co 3
+  { "key": "print", "serial_cmd": "" }             // not validated
 ]
 ```
 
