@@ -13,7 +13,7 @@
     "monitoring: data that is read and published to the dashboard.",
     "set: setpoints that can be changed from the dashboard.",
     "control: on/off actuators controlled by the operator (needs gate permission).",
-    "bridge: automatic sync between devices (not via an operator).",
+    "bridge: not implemented yet, rules are only parsed.",
     "Split-port example: plc1 port 502 = monitoring, plc2 port 503 = set+control.",
     "Multi-master example: plc1 = area2, plc2 = area3 (different IP/port, different unit_id)."
   ],
@@ -168,10 +168,9 @@
   ],
 
   "_bridge_notes": [
-    "Bridge task: read a source, then write a PLC (or vice versa). Bypasses control_gate (automated write, not an operator).",
-    "Override semantics: the PLC always wins: the bridge continuously re-asserts every poll_interval. After the bridge write, the value is published to MQTT so the dashboard stays in sync.",
-    "transform: 'passthrough' = copy the raw value. Future: 'linear' (offset+scale), 'inverse', etc.",
-    "Validated at startup: the device_id + key in read_from + write_to must exist in devices."
+    "Not implemented yet: bridge rules are parsed, but no task runs them.",
+    "Plan: read a source, then write a PLC (or vice versa), bypassing control_gate (automated write, not an operator).",
+    "transform: 'passthrough' = copy the raw value."
   ],
   "bridge": [
     {

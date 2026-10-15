@@ -395,9 +395,10 @@ differ per brand, so do not copy one to another scale without checking.
 
 ### Bridge rules
 
-Optional `bridge[]` rules copy a value read from one device into a setpoint on
-another, every poll cycle. Bridge writes bypass the control gate (they are
-automated, not operator-driven).
+**Not implemented yet.** `bridge[]` rules are parsed and their format is fixed,
+but no task runs them, so nothing is copied. The plan is to copy a value read
+from one device into a setpoint on another every poll cycle, without going
+through the control gate.
 
 ```jsonc
 "bridge": [
@@ -431,7 +432,7 @@ clean session).
 ## Control gate
 
 Writes from `control/{key}` (FC5/FC6 actuators) are authorized by a Valkey/Redis
-hash before each write. `set/{key}` and bridge writes bypass the gate.
+hash before each write. `set/{key}` writes bypass the gate.
 
 A write is granted only if both the global flag and the per-machine flag are
 `"1"`:
