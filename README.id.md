@@ -108,8 +108,8 @@ topic MQTT sebagai `{base_topic}/{location}/{name}/{topic}`.
 }
 ```
 
-**Machine id** diturunkan dari device pertama, urutan prioritas
-PLC → slave → weigher, sebagai `{location}/{name}`.
+Machine id adalah `{location}/{name}` dari device `master` pertama. Kalau tidak
+ada, dipakai `slave` pertama, lalu `weigher` pertama.
 
 ### Jenis device & koneksi
 
@@ -138,9 +138,10 @@ Jenis koneksi (`connection.type`):
 ```
 
 Beberapa slave di bus RS-485 yang sama (`path` sama) berbagi satu task actor dan
-dibedakan lewat `unit_id` — port dibuka tepat sekali. Untuk menjangkau device RTU
-di belakang converter Ethernet↔RS-485 yang berjalan mode transparent (raw RTU),
-arahkan koneksi ke converter tersebut.
+dibedakan lewat `unit_id`, jadi port hanya dibuka sekali. Koneksi `tcp` memakai
+Modbus TCP, jadi converter Ethernet ke RS-485 harus berjalan sebagai gateway
+Modbus TCP. Raw RTU lewat TCP (mode transparent converter) sudah ada sebagai
+transport di kode, tapi belum bisa dipilih dari mapping.
 
 ### Parameter & kategori
 

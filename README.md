@@ -107,8 +107,8 @@ each MQTT topic as `{base_topic}/{location}/{name}/{topic}`.
 }
 ```
 
-The **machine id** is derived from the first device, in priority order
-PLC → slave → weigher, as `{location}/{name}`.
+The machine id is `{location}/{name}` of the first `master` device. If there
+is none, the first `slave` is used, then the first `weigher`.
 
 ### Device types & connections
 
@@ -137,9 +137,10 @@ Connection types (`connection.type`):
 ```
 
 Multiple slaves on the same RS-485 bus (same `path`) share one actor task and are
-distinguished by `unit_id` — the port is opened exactly once. To reach an
-RTU device behind an Ethernet↔RS-485 converter running in transparent (raw-RTU)
-mode, point the connection at the converter.
+distinguished by `unit_id`, so the port is opened once. A `tcp` connection
+speaks Modbus TCP, so an Ethernet to RS-485 converter has to run as a Modbus TCP
+gateway. Raw RTU over TCP (the converter's transparent mode) exists as a
+transport in the code but cannot be selected from the mapping yet.
 
 ### Parameters & categories
 
