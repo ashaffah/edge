@@ -2,7 +2,7 @@
 //! 3 transports (TCP / RTU-over-TCP / RTU-Serial).
 //!
 //! Every transport goes through a single actor connection ([`crate::modbus_actor`]).
-//! One task owns the link; reader + writer + bridge send requests over an mpsc
+//! One task owns the link; reader + writer send requests over an mpsc
 //! channel and the actor serializes them. This is required for RTU (half-duplex,
 //! one physical port) and also for plain Modbus TCP, because many small PLCs /
 //! Modbus-TCP gateways accept only ONE concurrent socket. A separate reader and

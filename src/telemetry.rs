@@ -50,8 +50,8 @@ pub struct TelemetryConfig {
     /// Number of coils to read each cycle.
     /// = max(address)+1 over all Coils bindings, or 0 if there are none.
     pub coil_count: u16,
-    /// One polling session per source device (chiller, etc.). Empty if the
-    /// mapping has no `sources`.
+    /// One polling session per source device (additional PLC, slave). Empty if
+    /// the mapping has only one PLC.
     pub source_sessions: Vec<SourcePollSession>,
 }
 
@@ -59,7 +59,7 @@ pub struct TelemetryConfig {
 /// same actor (RTU) but a different unit_id, with separate error handling.
 #[derive(Clone)]
 pub struct SourcePollSession {
-    /// Device name (the key in `mapping.sources`). Used for logging.
+    /// This device's `device_id`. Used for logging.
     pub device_name: String,
     /// This device's machine id `{location}/{name}`, used for the per-machine
     /// plc_status topic (`{base}/{machine_id}/plc/status`).

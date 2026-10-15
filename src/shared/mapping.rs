@@ -11,13 +11,10 @@ use super::modbus::ByteOrder;
 
 /// One bridge rule: read a value from `read_from`, write it to `write_to`.
 ///
-/// The bridge task runs every poll interval. If the PLC and the operator
-/// dashboard both write to the same target, the PLC (via the bridge) always wins
-/// on the next cycle (≤1 poll interval). The bridge must publish the written
-/// value to MQTT after the write so the dashboard stays in sync.
-///
-/// The bridge task does not go through control_gate (automated write, not an
-/// operator). control_gate is only for the MQTT-triggered control subscriber.
+/// Not implemented yet: rules are parsed, but no task runs them. The plan is a
+/// task that runs every poll interval, bypasses control_gate (automated write,
+/// not an operator), and publishes the written value to MQTT so the dashboard
+/// stays in sync.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BridgeRule {
@@ -27,9 +24,8 @@ pub struct BridgeRule {
     pub transform: TransformKind,
 }
 
-/// A reference to one parameter on one device.
-/// `device = "plc"` refers to the `sources["plc"]` entry (main PLC). Any other name is a
-/// key in `sources`.
+/// A reference to one parameter on one device. `device` is the `device_id` of
+/// an entry in `devices`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Endpoint {
@@ -236,7 +232,7 @@ pub enum TypedValue {
 #[derive(Debug, Clone)]
 pub struct TopicEntry {
     pub machine: String,
-    /// `None` = main PLC (key `"plc"` in `sources`).
+    /// `None` = main PLC (the first `master` device in `devices`).
     /// `Some(name)` = another source device (key = device_id).
     pub device: Option<String>,
     pub category: Category,

@@ -4,7 +4,7 @@
     "machine_id is derived from the first device_type='master': {location}/{name} = area2/machine_c.",
     "The slave (chiller) is polled via Modbus RTU, sharing the RS-485 port, each with a different unit_id.",
     "The weigher is read via serial ASCII on a separate port, no Modbus polling.",
-    "bridge: automatically syncs the chiller outlet temperature to the PLC setpoint (no operator).",
+    "bridge: not implemented yet, the rule below is only parsed.",
     "parser.raw_topic: publish all capture groups as JSON to {base}/{location}/{name}/raw.",
     "  Payload: {\"weight\":12.5,\"unit\":\"kg\"}.",
     "commands: optional serial commands triggered from MQTT directly to the scale.",
@@ -231,8 +231,7 @@
   ],
   "_bridge_notes": [
     "Bridge: read the chiller outlet temperature, then write it to the PLC tank setpoint.",
-    "Runs every poll_interval_ms, bypasses the control gate, needs no operator.",
-    "The PLC always wins: the bridge re-asserts it every cycle."
+    "Not implemented yet: bridge rules are parsed, but no task runs them."
   ],
   "bridge": [
     {

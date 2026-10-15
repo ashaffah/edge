@@ -8,7 +8,7 @@
 //! (write returns EINPROGRESS / os error 115). So we use the actor pattern:
 //!
 //! - One task that owns the connection (serial port or TcpStream).
-//! - An mpsc channel for inbound requests from telemetry + control + bridge.
+//! - An mpsc channel for inbound requests from telemetry + control.
 //! - A oneshot reply per request. The caller awaits the reply before
 //!   sending the next request, so requests cannot overlap on
 //!   the bus.
@@ -18,8 +18,8 @@
 //! ## Sequential guarantee
 //!
 //! Because the channel is FIFO + the actor awaits each request until it
-//! completes (or times out), requests from different tasks (telemetry, control,
-//! bridge) are serialized, so there are never two frames on the bus at once.
+//! completes (or times out), requests from different tasks (telemetry, control)
+//! are serialized, so there are never two frames on the bus at once.
 //!
 //! ## Multi-slave (chiller + PLC on one RS-485 bus)
 //!
@@ -51,8 +51,7 @@ use crate::settings::{SerialDataBits, SerialParity, SerialStopBits, Transport};
 /// and `control_subscriber::RECONNECT_BACKOFF`.
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 
-/// Actor inbox capacity. Telemetry (1 req/poll cycle) + control (sporadic)
-/// + bridge (1 req/poll cycle per source param).
+/// Actor inbox capacity. Telemetry (1 req/poll cycle) + control (sporadic).
 ///
 /// 32 is large enough for bursts, small enough to apply backpressure if the
 /// actor is stuck. Full = the caller's `send().await` blocks until drained.

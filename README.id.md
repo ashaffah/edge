@@ -395,9 +395,10 @@ jangan disalin ke timbangan lain tanpa dicek dulu.
 
 ### Aturan bridge
 
-Aturan `bridge[]` opsional menyalin nilai yang dibaca dari satu device ke setpoint
-di device lain, tiap poll cycle. Write bridge melewati control gate (otomatis,
-bukan digerakkan operator).
+**Belum diimplementasikan.** Aturan `bridge[]` sudah di-parse dan formatnya
+tetap, tapi belum ada task yang menjalankannya, jadi tidak ada nilai yang
+disalin. Rencananya nilai yang dibaca dari satu device disalin ke setpoint di
+device lain tiap poll cycle, tanpa lewat control gate.
 
 ```jsonc
 "bridge": [
@@ -430,7 +431,7 @@ reconnect, agent otomatis subscribe ulang (rumqttc pakai clean session).
 ## Control gate
 
 Write dari `control/{key}` (aktuator FC5/FC6) diotorisasi oleh hash Valkey/Redis
-sebelum tiap write. Write `set/{key}` dan bridge melewati gate.
+sebelum tiap write. Write `set/{key}` melewati gate.
 
 Write di-grant hanya jika flag global dan flag per-mesin sama-sama `"1"`:
 
