@@ -19,6 +19,7 @@ sebagai service systemd yang hidup terus-menerus.
 - [File mapping](#file-mapping)
   - [Jenis device & koneksi](#jenis-device--koneksi)
   - [Parameter & kategori](#parameter--kategori)
+  - [Readback](#readback)
   - [Binding Modbus](#binding-modbus)
   - [Byte order](#byte-order)
   - [Parser weigher & command](#parser-weigher--command)
@@ -172,6 +173,28 @@ Satu parameter berbentuk:
 
 Parameter tanpa binding `modbus` tidak di-poll lewat Modbus (dipakai untuk nilai
 capture-group weigher).
+
+### Readback
+
+Tambahkan `"readback": true` di entry `set[]` atau `control[]` supaya agent
+membaca ulang alamat tulisnya tiap poll cycle dan mem-publish nilainya ke
+`{base_topic}/{location}/{name}/state/{topic}` (mis. `.../state/control/lamp`).
+Consumer bisa memakainya sebagai state PLC, misalnya untuk skip command yang
+nilainya sudah sama. Perubahan dari HMI/panel ikut terbaca, selama HMI menulis
+ke alamat yang sama.
+
+- `write_single_coil`: dibaca dengan FC1, di-publish `"true"` / `"false"`.
+- `write_single_register`: dibaca dengan FC3. `on_value` jadi `"true"`,
+  `off_value` jadi `"false"`, nilai lain tidak di-publish. Dua entry yang berbagi
+  satu register (mis. lift up = 4, lift down = 8, off = 0) hanya melaporkan
+  nilainya sendiri, jadi saat register = 4 state "down" tidak di-publish.
+- `write_multiple_registers`: dibaca dengan FC3 memakai `byte_order` yang sama
+  dengan write, di-publish sebagai angka.
+
+Pembacaan dikelompokkan per alamat jadi request di bawah batas Modbus (125
+register / 2000 coil), terpisah dari bulk read telemetry. Device yang readback-nya
+gagal di-skip 30 detik. Aktifkan `readback` hanya kalau PLC menyimpan nilai yang
+ditulis di alamat itu.
 
 ### Binding Modbus
 
@@ -426,6 +449,7 @@ Semua topic diawali `{base_topic}/{location}/{name}` (machine id):
 | `.../control/{key}` | subscribe | `"1"`/`"0"`/`"true"`/`"false"`, write aktuator  |
 | `.../set/{key}`     | subscribe | String numerik, write setpoint                  |
 | `.../cmd/{key}`     | subscribe | Payload apa pun, kirim `serial_cmd` weigher     |
+| `.../state/{topic}` | publish   | Readback entry `set`/`control`, lihat [Readback](#readback) |
 
 Last-Will-Testament broker mem-publish `{"status":"disconnected"}` (retained) ke
 topic heartbeat mesin primer kalau agent mati atau network putus. Setelah broker

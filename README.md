@@ -19,6 +19,7 @@ long-lived systemd service.
 - [Mapping file](#mapping-file)
   - [Device types & connections](#device-types--connections)
   - [Parameters & categories](#parameters--categories)
+  - [Readback](#readback)
   - [Modbus bindings](#modbus-bindings)
   - [Byte order](#byte-order)
   - [Weigher parser & commands](#weigher-parser--commands)
@@ -171,6 +172,29 @@ A parameter looks like:
 
 A parameter without a `modbus` binding is not polled by Modbus (used for weigher
 capture-group values).
+
+### Readback
+
+Add `"readback": true` to a `set[]` or `control[]` entry to have the agent read
+its write address back every poll cycle and publish the value to
+`{base_topic}/{location}/{name}/state/{topic}` (e.g. `.../state/control/lamp`).
+A consumer can use this as the PLC state, for example to skip a command whose
+value is already set. It also reflects changes made from an HMI/panel, as long
+as the HMI writes the same address.
+
+- `write_single_coil`: read with FC1, published as `"true"` / `"false"`.
+- `write_single_register`: read with FC3. `on_value` becomes `"true"`,
+  `off_value` becomes `"false"`, any other value is not published. Two entries
+  that share one register (e.g. lift up = 4, lift down = 8, off = 0) each only
+  report their own value, so while the register is 4 the "down" state is not
+  published.
+- `write_multiple_registers`: read with FC3 using the same `byte_order` as the
+  write, published as a number.
+
+Reads are grouped by address into requests under the Modbus limits (125
+registers / 2000 coils), separate from the telemetry bulk read. A device whose
+readback fails is skipped for 30 s. Enable `readback` only if the PLC keeps the
+written value at that address.
 
 ### Modbus bindings
 
@@ -426,6 +450,7 @@ All topics are prefixed `{base_topic}/{location}/{name}` (the machine id):
 | `.../control/{key}` | subscribe | `"1"`/`"0"`/`"true"`/`"false"`, actuator write  |
 | `.../set/{key}`     | subscribe | Numeric string, setpoint write                  |
 | `.../cmd/{key}`     | subscribe | Any payload, sends the weigher `serial_cmd`     |
+| `.../state/{topic}` | publish   | Readback of `set`/`control` entries, see [Readback](#readback) |
 
 The broker Last-Will-Testament publishes `{"status":"disconnected"}` (retained)
 to the primary machine's heartbeat topic if the agent dies or the network drops.

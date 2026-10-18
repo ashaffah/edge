@@ -22,6 +22,8 @@ Linux gateways and x86_64/Windows hosts.
   authorization gate and remote control.
 - `src/heartbeat.rs`, `src/resource.rs`, `src/plc_status.rs`,
   `src/telemetry.rs` - Liveness, resource monitoring, and status reporting.
+- `src/readback.rs` - Reads `set`/`control` write addresses back and publishes
+  them to `state/` topics.
 - `src/weigher.rs` - Weigher serial ASCII reading and parsing.
 - `src/scale.rs` - `scale` subcommand that prints raw scale serial output.
 - `src/shared/` - Shared domain types: `mapping.rs` (JSON mapping config) and
