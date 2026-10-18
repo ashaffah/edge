@@ -55,6 +55,18 @@ pub struct Param {
     /// A parameter without `modbus` is not polled by edge-client.
     #[serde(default)]
     pub modbus: Option<ModbusBinding>,
+    /// Only for `set[]` / `control[]` with a write binding: edge-client reads the
+    /// write address back every poll cycle and publishes it to [`state_topic`].
+    /// Default `false`. Enable only if the PLC keeps the value at that address.
+    #[serde(default)]
+    pub readback: bool,
+}
+
+/// Topic where edge-client publishes the readback value of a `set[]` /
+/// `control[]` entry. The `state/` segment keeps it out of the edge-client
+/// `control/#` and `set/#` subscriptions, so state is not read back as a command.
+pub fn state_topic(base_topic: &str, machine: &str, param_topic: &str) -> String {
+    format!("{base_topic}/{machine}/state/{param_topic}")
 }
 
 // ---------------------------------------------------------------------------
@@ -449,6 +461,26 @@ mod tests {
         }"#;
         let p: Param = serde_json::from_str(json).unwrap();
         assert!(p.modbus.is_none());
+        assert!(!p.readback, "readback defaults to false");
+    }
+
+    #[test]
+    fn param_readback_flag_deserializes() {
+        let json = r#"{
+            "key": "control_lamp", "label": "Lamp", "topic": "control/lamp",
+            "type": "boolean", "readback": true,
+            "modbus": { "kind": "write_single_coil", "address": 5 }
+        }"#;
+        let p: Param = serde_json::from_str(json).unwrap();
+        assert!(p.readback);
+    }
+
+    #[test]
+    fn state_topic_inserts_state_segment() {
+        assert_eq!(
+            state_topic("acme/site", "area1/machine_a", "control/lamp"),
+            "acme/site/area1/machine_a/state/control/lamp"
+        );
     }
 
     #[test]
