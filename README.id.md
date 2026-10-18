@@ -147,10 +147,13 @@ transport di kode, tapi belum bisa dipilih dari mapping.
 Tiap device mendeklarasikan parameter di tiga array:
 
 - `monitoring[]`: dibaca dan di-publish sebagai telemetry.
-- `set[]`: setpoint writable (float/integer), ditulis saat publish MQTT. Tidak
-  dicek control gate.
+- `set[]`: setpoint writable (float/integer), ditulis saat publish MQTT.
 - `control[]`: on/off aktuator (register atau coil), ditulis saat publish MQTT.
-  Dicek control gate.
+
+Array hanya menentukan segment topic (`set/` atau `control/`). Apakah write
+dicek [control gate](#control-gate) ditentukan oleh `modbus.kind`, dan agent
+tidak mengecek keduanya cocok. Taruh `write_multiple_registers` di `set[]` dan
+`write_single_coil` / `write_single_register` di `control[]`.
 
 Satu parameter berbentuk:
 
@@ -428,10 +431,18 @@ Last-Will-Testament broker mem-publish `{"status":"disconnected"}` (retained) ke
 topic heartbeat mesin primer kalau agent mati atau network putus. Setelah broker
 reconnect, agent otomatis subscribe ulang (rumqttc pakai clean session).
 
+Agent tidak mengecek siapa yang publish ke `control/`, `set/` atau `cmd/`, dan
+tidak punya dedup, ack atau audit log. Kalau butuh itu, pasang service di depan
+agent yang menerima command di topic-nya sendiri lalu meneruskannya, dan pakai
+ACL broker supaya hanya service itu yang boleh publish ke topic `control/#`,
+`set/#` dan `cmd/#` milik agent.
+
 ## Control gate
 
-Write dari `control/{key}` (aktuator FC5/FC6) diotorisasi oleh hash Valkey/Redis
-sebelum tiap write. Write `set/{key}` melewati gate.
+Write dengan `modbus.kind` `write_single_coil` atau `write_single_register`
+(FC5/FC6, aktuator di `control[]`) diotorisasi oleh hash Valkey/Redis sebelum
+tiap write. Write `write_multiple_registers` (FC16, setpoint di `set[]`) dan
+command weigher `cmd/{key}` tidak dicek.
 
 Write di-grant hanya jika flag global dan flag per-mesin sama-sama `"1"`:
 
@@ -440,9 +451,18 @@ redis-cli HSET control global 1
 redis-cli HSET control acme/site/area2/machine_c 1
 ```
 
-Kalau `CACHE_URL` kosong atau Valkey tidak terjangkau, **semua control di-deny**
-(fail-safe). Nama field per-mesin adalah `{base_topic}/{machine_id}`, identifier
-yang sama dengan prefix topic MQTT.
+Nama field per-mesin adalah `{base_topic}/{machine_id}`, identifier yang sama
+dengan prefix topic MQTT.
+
+Gate bersifat fail-closed. **Control di-deny** kalau:
+
+- `CACHE_URL` kosong.
+- Valkey tidak terjangkau saat startup. Agent tidak mencoba connect ulang, jadi
+  control tetap di-deny sampai agent di-restart.
+- `HGETALL` gagal saat runtime (command itu di-deny).
+- `CONTROL_GATE_KEY` di-set tapi kosong (`CONTROL_GATE_KEY=`). Nilai kosong itu
+  dipakai sebagai hash key, bukan default, dan hash dengan nama kosong biasanya
+  tidak punya flag. Hapus barisnya supaya default `control` yang dipakai.
 
 ## Diagnosa timbangan (`scale`)
 

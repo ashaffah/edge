@@ -146,10 +146,13 @@ transport in the code but cannot be selected from the mapping yet.
 Each device declares parameters under three arrays:
 
 - `monitoring[]`: read and published as telemetry.
-- `set[]`: writable setpoints (float/integer), written on MQTT publish. Not
-  checked by the control gate.
+- `set[]`: writable setpoints (float/integer), written on MQTT publish.
 - `control[]`: actuator on/off (register or coil), written on MQTT publish.
-  Checked by the control gate.
+
+The array only decides the topic segment (`set/` or `control/`). Whether a
+write goes through the [control gate](#control-gate) depends on `modbus.kind`,
+and the agent does not check that the two match. Keep `write_multiple_registers`
+in `set[]` and `write_single_coil` / `write_single_register` in `control[]`.
 
 A parameter looks like:
 
@@ -429,10 +432,18 @@ to the primary machine's heartbeat topic if the agent dies or the network drops.
 After a broker reconnect the agent re-subscribes automatically (rumqttc runs a
 clean session).
 
+The agent does not check who published to `control/`, `set/` or `cmd/`, and it
+has no dedup, ack or audit log. If you need those, put a service in front of
+the agent that receives commands on its own topics and forwards them, and use
+broker ACLs so that only this service can publish to the agent's `control/#`,
+`set/#` and `cmd/#` topics.
+
 ## Control gate
 
-Writes from `control/{key}` (FC5/FC6 actuators) are authorized by a Valkey/Redis
-hash before each write. `set/{key}` writes bypass the gate.
+Writes with `modbus.kind` `write_single_coil` or `write_single_register`
+(FC5/FC6, the `control[]` actuators) are authorized by a Valkey/Redis hash
+before each write. `write_multiple_registers` writes (FC16, the `set[]`
+setpoints) and weigher `cmd/{key}` commands are not checked.
 
 A write is granted only if both the global flag and the per-machine flag are
 `"1"`:
@@ -442,9 +453,19 @@ redis-cli HSET control global 1
 redis-cli HSET control acme/site/area2/machine_c 1
 ```
 
-If `CACHE_URL` is empty or Valkey is unreachable, **all control is denied**
-(fail-safe). The per-machine field name is `{base_topic}/{machine_id}`, the same
-identifier as the MQTT topic prefix.
+The per-machine field name is `{base_topic}/{machine_id}`, the same identifier
+as the MQTT topic prefix.
+
+The gate fails closed. **Control is denied** when:
+
+- `CACHE_URL` is empty.
+- Valkey is unreachable at startup. The agent does not retry this connection,
+  so control stays denied until the agent restarts.
+- `HGETALL` fails at runtime (that command is denied).
+- `CONTROL_GATE_KEY` is set but empty (`CONTROL_GATE_KEY=`). The empty value is
+  used as the hash key instead of the default, and a hash with an empty name
+  normally has no flags.
+  Remove the line to use the default `control`.
 
 ## Diagnosing a scale (`scale`)
 
