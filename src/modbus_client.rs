@@ -55,6 +55,15 @@ pub trait ReadConn: Send {
     /// Read `count` coils starting at address 0.
     async fn read_coils(&mut self, count: u16) -> Result<Vec<bool>>;
 
+    /// FC3 targeted read from `address`. Used by readback, whose addresses can
+    /// be far from 0 (e.g. setpoints at 200+), so a bulk read from 0 would
+    /// exceed the 125-register-per-request limit.
+    async fn read_holdings_at(&mut self, address: u16, count: u16) -> Result<Vec<u16>>;
+
+    /// FC1 targeted read from `address`. Same reason as `read_holdings_at`
+    /// (coils at 8212+, 2000-coil-per-request limit).
+    async fn read_coils_at(&mut self, address: u16, count: u16) -> Result<Vec<bool>>;
+
     /// FC4 Read Input Registers: targeted read from a specific `address`.
     /// Differs from `read_holdings` which always reads from 0.
     async fn read_input_registers(&mut self, address: u16, count: u16) -> Result<Vec<u16>>;

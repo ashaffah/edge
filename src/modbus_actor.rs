@@ -156,12 +156,25 @@ pub async fn spawn(transport: Transport, unit_id: u8, timings: RtuTimings) -> Re
 #[async_trait]
 impl ReadConn for ActorHandle {
     async fn read_holdings(&mut self, count: u16) -> Result<Vec<u16>> {
+        self.read_holdings_at(0, count).await
+    }
+
+    async fn read_holdings_at(&mut self, address: u16, count: u16) -> Result<Vec<u16>> {
         if count == 0 {
             return Ok(Vec::new());
         }
-        self.dispatch(Op::ReadHoldings { count })
+        self.dispatch(Op::ReadHoldings { address, count })
             .await?
             .into_holdings()
+    }
+
+    async fn read_coils_at(&mut self, address: u16, count: u16) -> Result<Vec<bool>> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        self.dispatch(Op::ReadCoils { address, count })
+            .await?
+            .into_coils()
     }
 
     async fn read_input_registers(&mut self, address: u16, count: u16) -> Result<Vec<u16>> {
@@ -183,10 +196,7 @@ impl ReadConn for ActorHandle {
     }
 
     async fn read_coils(&mut self, count: u16) -> Result<Vec<bool>> {
-        if count == 0 {
-            return Ok(Vec::new());
-        }
-        self.dispatch(Op::ReadCoils { count }).await?.into_coils()
+        self.read_coils_at(0, count).await
     }
 }
 
@@ -246,9 +256,11 @@ struct Request {
 
 enum Op {
     ReadHoldings {
+        address: u16,
         count: u16,
     },
     ReadCoils {
+        address: u16,
         count: u16,
     },
     ReadInputRegisters {
@@ -408,18 +420,18 @@ async fn drain_with_error(rx: &mut mpsc::Receiver<Request>, msg: &str) {
 
 async fn process(ctx: &mut ModbusContext, op: Op) -> Result<Reply> {
     match op {
-        Op::ReadHoldings { count } => {
+        Op::ReadHoldings { address, count } => {
             let res = ctx
-                .read_holding_registers(0, count)
+                .read_holding_registers(address, count)
                 .await
                 .context("rtu read_holding_registers transport error")?;
             let regs =
                 res.map_err(|e| anyhow!("rtu modbus protocol exception (holdings): {e:?}"))?;
             Ok(Reply::Holdings(regs))
         }
-        Op::ReadCoils { count } => {
+        Op::ReadCoils { address, count } => {
             let res = ctx
-                .read_coils(0, count)
+                .read_coils(address, count)
                 .await
                 .context("rtu read_coils transport error")?;
             let coils = res.map_err(|e| anyhow!("rtu modbus protocol exception (coils): {e:?}"))?;
@@ -683,7 +695,10 @@ mod tests {
         plc.tx
             .send(Request {
                 slave_id: plc.slave_id,
-                op: Op::ReadHoldings { count: 1 },
+                op: Op::ReadHoldings {
+                    address: 0,
+                    count: 1,
+                },
                 reply: reply_tx1,
             })
             .await
@@ -694,7 +709,10 @@ mod tests {
             .tx
             .send(Request {
                 slave_id: chiller.slave_id,
-                op: Op::ReadHoldings { count: 1 },
+                op: Op::ReadHoldings {
+                    address: 0,
+                    count: 1,
+                },
                 reply: reply_tx2,
             })
             .await
