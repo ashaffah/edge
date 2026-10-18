@@ -58,6 +58,7 @@ pub mod modbus_actor;
 pub mod modbus_client;
 pub mod mqtt;
 pub mod plc_status;
+pub mod readback;
 pub mod resource;
 pub mod scale;
 pub mod settings;

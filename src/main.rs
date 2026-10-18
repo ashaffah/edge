@@ -50,7 +50,7 @@ use edge_client::control_subscriber::{self, ControlSubscriberConfig};
 use edge_client::modbus_client;
 use edge_client::scale::{self, ScaleArgs};
 use edge_client::settings::Settings;
-use edge_client::{heartbeat, mqtt, plc_status, resource, telemetry, weigher};
+use edge_client::{heartbeat, mqtt, plc_status, readback, resource, telemetry, weigher};
 
 /// Edge agent. With no subcommand, runs the agent (poll Modbus + publish MQTT).
 #[derive(Parser)]
@@ -176,12 +176,17 @@ async fn main() -> Result<()> {
         let cc = ControlSubscriberConfig::from_settings(&settings, wf, &actor_cache)
             .await
             .context("build control subscriber config")?;
+        let rb = readback::build(&settings, &actor_cache)
+            .await
+            .context("build readback")?;
+        let poll_interval = tc.poll_interval;
 
         info!(
             heartbeat_interval_secs = 1,
             resource_interval_secs = 1,
             telemetry_active = tc.entries.len(),
             telemetry_source_sessions = tc.source_sessions.len(),
+            readback_items = rb.iter().map(|d| d.items.len()).sum::<usize>(),
             control_bindings = cc.entries.len(),
             control_patterns = ?cc.subscribe_patterns,
             "starting modbus tasks"
@@ -209,6 +214,7 @@ async fn main() -> Result<()> {
         let heartbeat_client = client.clone();
         let resource_client = client.clone();
         let telemetry_client = client.clone();
+        let readback_client = client.clone();
         let plc_status_client = client.clone();
         let control_client = client.clone();
         let weigher_client = client.clone();
@@ -235,6 +241,7 @@ async fn main() -> Result<()> {
             plc_status_tx,
             source_status_tx,
         ));
+        let readback_fut = tokio::spawn(readback::run(readback_client, rb, poll_interval, qos));
         let control_fut = tokio::spawn(control_subscriber::run(
             control_client,
             cc,
@@ -267,6 +274,9 @@ async fn main() -> Result<()> {
             }
             _ = async { telemetry_fut.await.ok(); } => {
                 info!("telemetry publisher exited (unexpected)");
+            }
+            _ = async { readback_fut.await.ok(); } => {
+                info!("readback publisher exited (unexpected)");
             }
             _ = async { plc_status_fut.await.ok(); } => {
                 info!("plc status publisher exited (unexpected)");
