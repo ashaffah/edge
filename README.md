@@ -242,6 +242,13 @@ Examples:
   2714 becomes 3.8e-42) and publishes `0` for `type: integer`, so set
   `"format": "u32"` for integer registers. Check the raw registers first, see
   [Checking raw registers](#checking-raw-registers-mbpoll).
+- Decode is not taken from `type` because two PLCs can store the same
+  `type: integer` parameter differently (float on one, DINT on another).
+  Changing `type` to fix the decode also changes the payload that consumers
+  receive, e.g. `type: float` publishes `"915.00"` instead of `"915"`.
+- `format` applies to `read_holding_registers` only. For
+  `read_input_registers` the 2-register decode follows `type` and `scale`, and a
+  `format` field is rejected when the mapping loads.
 - `off_value` defaults to `0` when omitted.
 
 ### Byte order
