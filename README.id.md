@@ -27,6 +27,7 @@ sebagai service systemd yang hidup terus-menerus.
   - [Aturan bridge](#aturan-bridge)
 - [Tata letak topic MQTT](#tata-letak-topic-mqtt)
 - [Control gate](#control-gate)
+- [Cek register mentah (`mbpoll`)](#cek-register-mentah-mbpoll)
 - [Diagnosa timbangan (`scale`)](#diagnosa-timbangan-scale)
 - [Cross-compilation](#cross-compilation)
 - [Lisensi](#lisensi)
@@ -216,6 +217,9 @@ Contoh:
 // FC3 monitoring float, byte order big/little
 { "kind": "read_holding_registers", "address": 10, "byte_order": "big_little" }
 
+// FC3 monitoring integer 32-bit (DINT di PLC, mis. counter run time)
+{ "kind": "read_holding_registers", "address": 36, "byte_order": "big_little", "format": "u32" }
+
 // FC4 dengan multiplier scale (mis. raw 250 → 25.0)
 { "kind": "read_input_registers", "address": 1000, "scale": 0.1 }
 
@@ -232,6 +236,12 @@ Contoh:
 - `read_holding_registers` dan `read_input_registers` men-decode nilai 32-bit dari
   2 register. Dengan `scale`, `read_input_registers` malah membaca 1 register lalu
   mengalikan.
+- `read_holding_registers` punya field opsional `format`: `"f32"` (default) atau
+  `"u32"`, sesuai isi 2 register di PLC. `type` hanya menentukan format payload
+  yang di-publish. DINT yang dibaca sebagai `f32` jadi angka denormal (mis. 2714
+  jadi 3.8e-42) dan terkirim `0` untuk `type: integer`, jadi pakai
+  `"format": "u32"` untuk register integer. Cek register mentahnya dulu, lihat
+  [Cek register mentah](#cek-register-mentah-mbpoll).
 - `off_value` default `0` kalau tidak diisi.
 
 ### Byte order
@@ -487,6 +497,42 @@ Gate bersifat fail-closed. **Control di-deny** kalau:
 - `CONTROL_GATE_KEY` di-set tapi kosong (`CONTROL_GATE_KEY=`). Nilai kosong itu
   dipakai sebagai hash key, bukan default, dan hash dengan nama kosong biasanya
   tidak punya flag. Hapus barisnya supaya default `control` yang dipakai.
+
+## Cek register mentah (`mbpoll`)
+
+Kalau nilai salah atau selalu `0`, baca register mentahnya dengan
+[mbpoll](https://github.com/epsilonrt/mbpoll) (`sudo apt install mbpoll`).
+Banyak PLC membatasi jumlah koneksi Modbus TCP, dan edge-client sudah memakai
+sebagian slotnya. Kalau mbpoll gagal dengan `Connection reset by peer`, stop
+service dulu. Selama service berhenti, telemetry dan control PLC itu juga
+berhenti.
+
+```bash
+sudo systemctl stop rust_client
+sleep 3
+# Address di mapping 0-based, jadi pakai -0. Hanya baca: angka setelah host
+# membuat mbpoll menulis nilai itu ke register.
+mbpoll -m tcp -a 1 -t 4:hex -0 -r 0 -c 60 -1 <PLC_IP> | grep '^\[' > /tmp/a.txt
+sleep 5
+mbpoll -m tcp -a 1 -t 4:hex -0 -r 0 -c 60 -1 <PLC_IP> | grep '^\[' > /tmp/b.txt
+sudo systemctl start rust_client
+
+diff /tmp/a.txt /tmp/b.txt   # register yang berubah dalam 5 detik
+cat /tmp/b.txt
+```
+
+Jalankan saat mesin jalan. Saat mesin idle, counter dan nilai motor sering
+semuanya `0`, dan itu terlihat sama di format apa pun.
+
+Cara membaca pasangan register (`big_little`, register kedua = high word):
+
+- Float: high word berisi exponent, mis. `[0]: 0x999A [1]: 0x41E9` = 29.20.
+  Pakai default `format`.
+- DINT: high word `0x0000` untuk nilai kecil, mis.
+  `[36]: 0x0A9A [37]: 0x0000` = 2714, dan counter run time naik 1 per detik.
+  Pakai `"format": "u32"`.
+
+Untuk `big_big`, register pertama yang jadi high word. Lihat [Byte order](#byte-order).
 
 ## Diagnosa timbangan (`scale`)
 

@@ -27,6 +27,7 @@ long-lived systemd service.
   - [Bridge rules](#bridge-rules)
 - [MQTT topic layout](#mqtt-topic-layout)
 - [Control gate](#control-gate)
+- [Checking raw registers (`mbpoll`)](#checking-raw-registers-mbpoll)
 - [Diagnosing a scale (`scale`)](#diagnosing-a-scale-scale)
 - [Cross-compilation](#cross-compilation)
 - [License](#license)
@@ -216,6 +217,9 @@ Examples:
 // FC3 monitoring float, big/little byte order
 { "kind": "read_holding_registers", "address": 10, "byte_order": "big_little" }
 
+// FC3 monitoring 32-bit integer (DINT on the PLC, e.g. a run time counter)
+{ "kind": "read_holding_registers", "address": 36, "byte_order": "big_little", "format": "u32" }
+
 // FC4 with a scale multiplier (e.g. raw 250 → 25.0)
 { "kind": "read_input_registers", "address": 1000, "scale": 0.1 }
 
@@ -232,6 +236,12 @@ Examples:
 - `read_holding_registers` and `read_input_registers` decode a 32-bit value from
   2 registers. With `scale`, `read_input_registers` instead reads 1 register and
   multiplies.
+- `read_holding_registers` takes an optional `format`: `"f32"` (default) or
+  `"u32"`, for what the 2 registers hold on the PLC. `type` only sets the
+  published payload format. A DINT read as `f32` decodes to a denormal (e.g.
+  2714 becomes 3.8e-42) and publishes `0` for `type: integer`, so set
+  `"format": "u32"` for integer registers. Check the raw registers first, see
+  [Checking raw registers](#checking-raw-registers-mbpoll).
 - `off_value` defaults to `0` when omitted.
 
 ### Byte order
@@ -491,6 +501,41 @@ The gate fails closed. **Control is denied** when:
   used as the hash key instead of the default, and a hash with an empty name
   normally has no flags.
   Remove the line to use the default `control`.
+
+## Checking raw registers (`mbpoll`)
+
+When a value is wrong or always `0`, read the raw registers with
+[mbpoll](https://github.com/epsilonrt/mbpoll) (`sudo apt install mbpoll`).
+Many PLCs limit the number of Modbus TCP connections, and edge-client already
+holds some of them. If mbpoll fails with `Connection reset by peer`, stop the
+service first. Telemetry and control for that PLC stop while it is down.
+
+```bash
+sudo systemctl stop rust_client
+sleep 3
+# Mapping addresses are 0-based, hence -0. Read only: a value after the host
+# makes mbpoll write it to the register.
+mbpoll -m tcp -a 1 -t 4:hex -0 -r 0 -c 60 -1 <PLC_IP> | grep '^\[' > /tmp/a.txt
+sleep 5
+mbpoll -m tcp -a 1 -t 4:hex -0 -r 0 -c 60 -1 <PLC_IP> | grep '^\[' > /tmp/b.txt
+sudo systemctl start rust_client
+
+diff /tmp/a.txt /tmp/b.txt   # registers that changed in 5 s
+cat /tmp/b.txt
+```
+
+Run it while the machine is running. On an idle machine counters and motor
+values are often all `0`, which looks the same in every format.
+
+Reading a register pair (`big_little`, the second register is the high word):
+
+- Float: the high word holds the exponent, e.g. `[0]: 0x999A [1]: 0x41E9` is
+  29.20. Keep the default `format`.
+- DINT: the high word is `0x0000` for small values, e.g.
+  `[36]: 0x0A9A [37]: 0x0000` is 2714 and a run time counter goes up by 1 per
+  second. Use `"format": "u32"`.
+
+With `big_big` the first register is the high word. See [Byte order](#byte-order).
 
 ## Diagnosing a scale (`scale`)
 
