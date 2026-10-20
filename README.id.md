@@ -242,6 +242,13 @@ Contoh:
   jadi 3.8e-42) dan terkirim `0` untuk `type: integer`, jadi pakai
   `"format": "u32"` untuk register integer. Cek register mentahnya dulu, lihat
   [Cek register mentah](#cek-register-mentah-mbpoll).
+- Decode tidak diambil dari `type` karena dua PLC bisa menyimpan parameter
+  `type: integer` yang sama dengan cara berbeda (float di satu PLC, DINT di PLC
+  lain). Mengganti `type` untuk memperbaiki decode ikut mengubah payload yang
+  diterima consumer, mis. `type: float` publish `"915.00"`, bukan `"915"`.
+- `format` hanya untuk `read_holding_registers`. Di `read_input_registers`
+  decode 2 register mengikuti `type` dan `scale`, dan field `format` ditolak saat
+  mapping di-load.
 - `off_value` default `0` kalau tidak diisi.
 
 ### Byte order
