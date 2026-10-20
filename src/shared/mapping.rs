@@ -109,13 +109,16 @@ pub enum ModbusBinding {
     ReadCoils { address: u16 },
     /// FC2, Read Discrete Inputs. Targeted single-bit read, read-only.
     ReadDiscreteInputs { address: u16 },
-    /// FC3, Read Holding Registers. Bulk read 2 registers (f32/i32) from address 0.
+    /// FC3, Read Holding Registers. Bulk read 2 registers (f32/u32) from address 0.
+    /// `format`: what the 2 registers hold on the PLC, default `f32`.
     ReadHoldingRegisters {
         address: u16,
         #[serde(default)]
         byte_order: ByteOrder,
         #[serde(default)]
         scale: Option<f64>,
+        #[serde(default)]
+        format: HoldingFormat,
     },
     /// FC4, Read Input Registers. Targeted read, address can be sparse.
     /// `scale`: optional multiplier (e.g. 0.1 for chiller raw×0.1=°C).
@@ -143,6 +146,20 @@ pub enum ModbusBinding {
         #[serde(default)]
         byte_order: ByteOrder,
     },
+}
+
+/// Format of the 32-bit value held in 2 holding registers, separate from the
+/// published `type`.
+///
+/// PLCs store the same kind of parameter differently: one keeps a run time as
+/// a float, another as a DINT (seconds counter). An integer read as f32 is a
+/// denormal, which then casts to i64 as 0.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoldingFormat {
+    #[default]
+    F32,
+    U32,
 }
 
 impl ModbusBinding {
@@ -530,8 +547,28 @@ mod tests {
         }"#;
         let p: Param = serde_json::from_str(json).unwrap();
         match p.modbus.expect("modbus present") {
-            ModbusBinding::ReadHoldingRegisters { byte_order, .. } => {
+            ModbusBinding::ReadHoldingRegisters {
+                byte_order, format, ..
+            } => {
                 assert_eq!(byte_order, ByteOrder::BigBig);
+                assert_eq!(format, HoldingFormat::F32);
+            }
+            _ => panic!("expected ReadHoldingRegisters"),
+        }
+    }
+
+    #[test]
+    fn read_holding_register_format_u32_deserializes() {
+        let json = r#"{
+            "key": "run_time", "label": "Run Time", "topic": "run/time",
+            "type": "integer",
+            "modbus": { "kind": "read_holding_registers", "address": 36,
+                        "byte_order": "big_little", "format": "u32" }
+        }"#;
+        let p: Param = serde_json::from_str(json).unwrap();
+        match p.modbus.expect("modbus present") {
+            ModbusBinding::ReadHoldingRegisters { format, .. } => {
+                assert_eq!(format, HoldingFormat::U32);
             }
             _ => panic!("expected ReadHoldingRegisters"),
         }

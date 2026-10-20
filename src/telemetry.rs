@@ -14,7 +14,7 @@
 //!   - Publish failed per-topic: log, continue (the rumqttc queue is handled
 //!     internally)
 
-use crate::shared::{Category, DataType, ModbusBinding, TopicEntry, TopicIndex};
+use crate::shared::{Category, DataType, HoldingFormat, ModbusBinding, TopicEntry, TopicIndex};
 use anyhow::{Context as _, Result, anyhow};
 use rumqttc::{AsyncClient, QoS};
 use std::time::Duration;
@@ -232,6 +232,7 @@ fn decode_and_format(entry: &TopicEntry, holdings: &[u16], coils: &[bool]) -> Re
             address,
             byte_order,
             scale,
+            format,
         } => {
             let a = *address as usize;
             // Spans 2 registers: needs holdings[a] and holdings[a+1].
@@ -242,7 +243,10 @@ fn decode_and_format(entry: &TopicEntry, holdings: &[u16], coils: &[bool]) -> Re
                 ));
             }
             let regs = [holdings[a], holdings[a + 1]];
-            let raw = byte_order.decode_f32(regs) as f64;
+            let raw = match format {
+                HoldingFormat::F32 => byte_order.decode_f32(regs) as f64,
+                HoldingFormat::U32 => byte_order.decode_u32(regs) as f64,
+            };
             let scaled = raw * scale.unwrap_or(1.0);
             match entry.data_type {
                 DataType::Float => Ok(format!("{scaled:.2}")),
@@ -644,6 +648,7 @@ mod tests {
                 address,
                 byte_order: ByteOrder::BigBig,
                 scale: None,
+                format: HoldingFormat::F32,
             }),
         }
     }
@@ -688,6 +693,25 @@ mod tests {
     }
 
     #[test]
+    fn decode_holding_integer_format_u32() {
+        // DINT seconds counter, big_little: regs[36]=0x0A9A (low), regs[37]=0x0000
+        // (high) = 2714. Decoded as f32 this would publish "0".
+        let entry = TopicEntry {
+            modbus: Some(ModbusBinding::ReadHoldingRegisters {
+                address: 36,
+                byte_order: ByteOrder::BigLittle,
+                scale: None,
+                format: HoldingFormat::U32,
+            }),
+            ..holding_entry("run_time", DataType::Integer, 36)
+        };
+        let mut holdings = vec![0u16; 38];
+        holdings[36] = 0x0A9A;
+        let out = decode_and_format(&entry, &holdings, &[]).unwrap();
+        assert_eq!(out, "2714");
+    }
+
+    #[test]
     fn decode_holding_float_with_scale_applied() {
         // Param with scale: 0.1, raw 750.0 publishes "75.00"
         // 750.0f32 = 0x443B8000, big_big regs [0x443B, 0x8000]
@@ -704,6 +728,7 @@ mod tests {
                 address: 0,
                 byte_order: ByteOrder::BigBig,
                 scale: Some(0.1),
+                format: HoldingFormat::F32,
             }),
         };
         let holdings = vec![0x443Bu16, 0x8000];
@@ -722,6 +747,7 @@ mod tests {
                 address: 0,
                 byte_order: ByteOrder::BigBig,
                 scale: Some(1.0),
+                format: HoldingFormat::F32,
             }),
             ..holding_entry("temp_tank", DataType::Float, 0)
         };
