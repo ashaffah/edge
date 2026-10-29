@@ -17,6 +17,7 @@ sebagai service systemd yang hidup terus-menerus.
 - [Mulai cepat](#mulai-cepat)
 - [Konfigurasi (`.env`)](#konfigurasi-env)
 - [File mapping](#file-mapping)
+  - [Folder mapping](#folder-mapping)
   - [Jenis device & koneksi](#jenis-device--koneksi)
   - [Parameter & kategori](#parameter--kategori)
   - [Readback](#readback)
@@ -88,7 +89,7 @@ eksternal dan beberapa pengaturan runtime.
 | `MQTT_WEBSOCKET_PATH` | `/mqtt`          | Path WebSocket (khusus ws/wss)                                       |
 | `MQTT_KEEPALIVE`      | `60`             | Keepalive detik; LWT fire setelah timeout ini saat berhenti mendadak |
 | `MQTT_PUBLISH_QOS`    | `1`              | QoS publish: `0`, `1`, atau `2`                                      |
-| `MQTT_MAPPING_PATH`   | `./mapping.json` | Path ke JSON mapping                                                 |
+| `MQTT_MAPPING_PATH`   | `./mapping.json` | Path ke file JSON mapping atau folder mapping                        |
 | `CACHE_URL`           | _(kosong)_       | URL Valkey/Redis untuk control gate; kosong = semua control di-deny  |
 | `CONTROL_GATE_KEY`    | `control`        | Hash key Valkey untuk control gate                                   |
 | `RUST_LOG`            | `info`           | Filter tracing (mis. `info`, `edge_client=debug`)                    |
@@ -113,6 +114,32 @@ topic MQTT sebagai `{base_topic}/{location}/{name}/{topic}`.
 
 Machine id adalah `{location}/{name}` dari device `master` pertama. Kalau tidak
 ada, dipakai `slave` pertama, lalu `weigher` pertama.
+
+### Folder mapping
+
+`MQTT_MAPPING_PATH` juga boleh menunjuk ke folder, sehingga tiap device ada di
+filenya sendiri:
+
+```
+mapping/
+├── _base.json   base_topic, poll_interval_ms, bridge, daftar file device
+├── plc1.json    satu entry device (isi sama dengan satu elemen "devices")
+└── plc2.json
+```
+
+```json
+{
+  "base_topic": "acme/site",
+  "poll_interval_ms": 1000,
+  "devices": ["plc1.json", "plc2.json"],
+  "bridge": []
+}
+```
+
+`devices` di `_base.json` berisi nama file, dan urutannya berarti sama dengan
+urutan array `devices` di format satu file: `master` pertama menentukan machine
+id dan PLC primer. File di folder yang tidak disebut diabaikan. Agent gagal start
+kalau ada dua device dengan `device_id` yang sama.
 
 ### Jenis device & koneksi
 
