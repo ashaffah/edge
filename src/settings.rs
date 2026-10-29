@@ -12,9 +12,12 @@
 //! control-command gate authorization; see [`crate::control_gate`] for details.
 
 use anyhow::{Context, Result, bail};
-use std::{env, fs, path::Path, time::Duration};
+use serde::{Deserialize, de::DeserializeOwned};
+use std::{collections::HashSet, env, fs, path::Path, time::Duration};
 
-use crate::shared::{DeviceConnection, DeviceMapping, DeviceType};
+use crate::shared::{BridgeRule, DeviceConnection, DeviceEntry, DeviceMapping, DeviceType};
+
+const MAPPING_BASE_FILE: &str = "_base.json";
 
 // ---------------------------------------------------------------------------
 // Top-level
@@ -152,7 +155,7 @@ impl Settings {
     pub fn from_env() -> Result<Self> {
         let mqtt = load_mqtt_settings()?;
         let mapping_path = optional("MQTT_MAPPING_PATH", "./mapping.json");
-        let mapping = load_mapping_file(&mapping_path)?;
+        let mapping = load_mapping(&mapping_path)?;
 
         let base_topic = mapping.base_topic.clone();
         let machine_id = derive_machine_id(&mapping)?;
@@ -362,6 +365,65 @@ fn load_control_gate_settings() -> ControlGateSettings {
     }
 }
 
+/// `path` is either a single `DeviceMapping` file or a directory: `_base.json`
+/// holds `base_topic`, `bridge`, and `devices` as a list of device file names
+/// (one `DeviceEntry` per file) in the same directory.
+fn load_mapping(path: impl AsRef<Path>) -> Result<DeviceMapping> {
+    let path = path.as_ref();
+    let mapping = if path.is_dir() {
+        load_mapping_dir(path)?
+    } else {
+        load_mapping_file(path)?
+    };
+
+    // `bridge` refers to devices by `device_id`, so it must be unique.
+    let mut seen = HashSet::new();
+    for d in &mapping.devices {
+        if !seen.insert(d.device_id.as_str()) {
+            bail!(
+                "duplicate device_id {} in mapping: {}",
+                d.device_id,
+                path.display()
+            );
+        }
+    }
+    Ok(mapping)
+}
+
+#[derive(Deserialize)]
+struct MappingBase {
+    base_topic: String,
+    #[serde(default)]
+    poll_interval_ms: Option<u64>,
+    /// An explicit list rather than a directory scan: the first master decides
+    /// `machine_id` and the primary PLC, so order must not follow file names.
+    devices: Vec<String>,
+    #[serde(default)]
+    bridge: Vec<BridgeRule>,
+}
+
+fn load_mapping_dir(dir: &Path) -> Result<DeviceMapping> {
+    let base: MappingBase = read_json(&dir.join(MAPPING_BASE_FILE))?;
+    let devices = base
+        .devices
+        .iter()
+        .map(|file| read_json(&dir.join(file)))
+        .collect::<Result<Vec<DeviceEntry>>>()?;
+
+    Ok(DeviceMapping {
+        base_topic: base.base_topic,
+        poll_interval_ms: base.poll_interval_ms,
+        devices,
+        bridge: base.bridge,
+    })
+}
+
+fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("read mapping file: {}", path.display()))?;
+    serde_json::from_str(&raw).with_context(|| format!("parse mapping JSON: {}", path.display()))
+}
+
 /// Load the mapping from a file. `DeviceMapping` format (a `devices` array), as
 /// in `example-mapping.json`. See `DeviceMapping` in `shared/src/mapping.rs`.
 fn load_mapping_file(path: impl AsRef<Path>) -> Result<DeviceMapping> {
@@ -441,5 +503,97 @@ mod tests {
         // Make sure the three variants render differently
         assert_ne!(tcp.display(), rtu_tcp.display());
         assert_ne!(rtu_tcp.display(), rtu_ser.display());
+    }
+
+    fn device_json(device_id: &str, location: &str) -> String {
+        format!(
+            r#"{{ "device_type": "master", "device_id": "{device_id}", "location": "{location}",
+                "name": "line", "connection": {{ "type": "tcp", "host": "127.0.0.1", "unit_id": 1 }} }}"#
+        )
+    }
+
+    fn temp_dir(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+        let dir = env::temp_dir().join(format!("edge-mapping-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        for (file, content) in files {
+            fs::write(dir.join(file), content).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn dir_keeps_order_from_base_not_file_name() {
+        // "a_line2" sorts first by name, but _base lists line1 first.
+        let dir = temp_dir(
+            "order",
+            &[
+                (
+                    "_base.json",
+                    r#"{ "base_topic": "acme/site", "devices": ["z_line1.json", "a_line2.json"] }"#,
+                ),
+                ("z_line1.json", &device_json("plc1", "line1")),
+                ("a_line2.json", &device_json("plc2", "line2")),
+                ("unlisted.json", &device_json("plc3", "line3")),
+            ],
+        );
+        let m = load_mapping(&dir).unwrap();
+        let ids: Vec<_> = m.devices.iter().map(|d| d.device_id.as_str()).collect();
+        assert_eq!(ids, ["plc1", "plc2"]);
+        assert_eq!(derive_machine_id(&m).unwrap(), "line1/line");
+    }
+
+    #[test]
+    fn dir_rejects_duplicate_device_id() {
+        let dir = temp_dir(
+            "dup",
+            &[
+                (
+                    "_base.json",
+                    r#"{ "base_topic": "acme/site", "devices": ["a.json", "b.json"] }"#,
+                ),
+                ("a.json", &device_json("plc1", "line1")),
+                ("b.json", &device_json("plc1", "line2")),
+            ],
+        );
+        let err = load_mapping(&dir).unwrap_err().to_string();
+        assert!(err.contains("duplicate device_id plc1"), "{err}");
+    }
+
+    #[test]
+    fn dir_missing_listed_file_names_it() {
+        let dir = temp_dir(
+            "missing",
+            &[(
+                "_base.json",
+                r#"{ "base_topic": "acme/site", "devices": ["plc1.json"] }"#,
+            )],
+        );
+        let err = format!("{:#}", load_mapping(&dir).unwrap_err());
+        assert!(err.contains("plc1.json"), "{err}");
+    }
+
+    #[test]
+    fn single_file_still_loads() {
+        let json = format!(
+            r#"{{ "base_topic": "acme/site", "devices": [{}] }}"#,
+            device_json("plc1", "line1")
+        );
+        let dir = temp_dir("single", &[("mapping.json", &json)]);
+        let m = load_mapping(dir.join("mapping.json")).unwrap();
+        assert_eq!(derive_machine_id(&m).unwrap(), "line1/line");
+    }
+
+    #[test]
+    fn example_mappings_load() {
+        for file in [
+            "example-mapping.json",
+            "example-mapping-plc-only.json",
+            "example-mapping-weigher-only.json",
+            "example-mapping-plc-slave-weigher.json",
+        ] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+            load_mapping(&path).unwrap_or_else(|e| panic!("{file}: {e:#}"));
+        }
     }
 }

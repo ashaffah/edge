@@ -17,6 +17,7 @@ long-lived systemd service.
 - [Quick start](#quick-start)
 - [Configuration (`.env`)](#configuration-env)
 - [Mapping file](#mapping-file)
+  - [Mapping directory](#mapping-directory)
   - [Device types & connections](#device-types--connections)
   - [Parameters & categories](#parameters--categories)
   - [Readback](#readback)
@@ -87,7 +88,7 @@ external connection credentials and a few runtime knobs.
 | `MQTT_WEBSOCKET_PATH` | `/mqtt`          | WebSocket path (ws/wss only)                                       |
 | `MQTT_KEEPALIVE`      | `60`             | Keepalive seconds; the LWT fires after this timeout on a hard stop |
 | `MQTT_PUBLISH_QOS`    | `1`              | Publish QoS: `0`, `1`, or `2`                                      |
-| `MQTT_MAPPING_PATH`   | `./mapping.json` | Path to the JSON mapping                                           |
+| `MQTT_MAPPING_PATH`   | `./mapping.json` | Path to the JSON mapping file or mapping directory                 |
 | `CACHE_URL`           | _(empty)_        | Valkey/Redis URL for the control gate; empty = deny all control    |
 | `CONTROL_GATE_KEY`    | `control`        | Valkey hash key for the control gate                               |
 | `RUST_LOG`            | `info`           | Tracing filter (e.g. `info`, `edge_client=debug`)                  |
@@ -112,6 +113,32 @@ each MQTT topic as `{base_topic}/{location}/{name}/{topic}`.
 
 The machine id is `{location}/{name}` of the first `master` device. If there
 is none, the first `slave` is used, then the first `weigher`.
+
+### Mapping directory
+
+`MQTT_MAPPING_PATH` can also point to a directory, so each device lives in its
+own file:
+
+```
+mapping/
+├── _base.json   base_topic, poll_interval_ms, bridge, list of device files
+├── plc1.json    one device entry (same content as one element of "devices")
+└── plc2.json
+```
+
+```json
+{
+  "base_topic": "acme/site",
+  "poll_interval_ms": 1000,
+  "devices": ["plc1.json", "plc2.json"],
+  "bridge": []
+}
+```
+
+`devices` in `_base.json` lists file names, and their order means the same as
+the order of the `devices` array in a single file: the first `master` decides
+the machine id and the primary PLC. Files in the directory that are not listed
+are ignored. The agent fails at startup if two devices share a `device_id`.
 
 ### Device types & connections
 
