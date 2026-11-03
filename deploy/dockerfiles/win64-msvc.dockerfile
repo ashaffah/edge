@@ -23,4 +23,6 @@ ENV CXX_x86_64_pc_windows_msvc=clang-cl
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo xwin build --release --target x86_64-pc-windows-msvc
+# Space-separated cargo package flags, set by build.sh (e.g. "-p edge-client").
+ARG PACKAGES="--workspace"
+RUN cargo xwin build --release --target x86_64-pc-windows-msvc $PACKAGES

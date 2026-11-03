@@ -22,4 +22,6 @@ ENV CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release --target armv7-unknown-linux-gnueabihf
+# Space-separated cargo package flags, set by build.sh (e.g. "-p edge-client").
+ARG PACKAGES="--workspace"
+RUN cargo build --release --target armv7-unknown-linux-gnueabihf $PACKAGES

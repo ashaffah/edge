@@ -17,6 +17,7 @@
 # Examples:
 #   bash build.sh armv7-musl
 #   bash build.sh armv7-musl edge-client
+#   bash build.sh x86_64-musl iot-middleware
 #   bash build.sh win-x86_64-gnu edge-client
 #
 # Run from the project root (the directory containing Cargo.toml).
@@ -28,12 +29,13 @@ set -euo pipefail
 # Not using declare -A so it stays compatible with bash 3.2 (macOS default).
 # ---------------------------------------------------------------------------
 
-ALL_CRATES=(edge-client)
+ALL_CRATES=(edge-client iot-middleware)
 
 # Return the binary name for a crate, or exit 1 if unknown.
 crate_to_binary() {
     case "$1" in
         edge-client)    echo "edge-client" ;;
+        iot-middleware) echo "iot-middleware" ;;
         *)              return 1 ;;
     esac
 }
@@ -60,6 +62,7 @@ usage() {
     echo "Examples:"
     echo "  bash build.sh armv7-musl"
     echo "  bash build.sh armv7-musl edge-client"
+    echo "  bash build.sh x86_64-musl iot-middleware"
     echo "  bash build.sh win-x86_64-gnu edge-client"
 }
 
@@ -147,9 +150,16 @@ CONTAINER="rust-build-$TARGET"
 cleanup() { podman rm -f "$CONTAINER" 2>/dev/null || true; }
 trap cleanup EXIT
 
-echo "==> Building workspace for target: $TARGET"
-echo "    Crates to copy: ${SELECTED_CRATES[*]}"
-podman build -t "$IMAGE" -f "$DOCKERFILE" .
+# Only compile the selected crates, so an edge-only build does not pull in
+# the middleware's ScyllaDB driver.
+PACKAGES=""
+for crate in "${SELECTED_CRATES[@]}"; do
+    PACKAGES="$PACKAGES -p $crate"
+done
+
+echo "==> Building for target: $TARGET"
+echo "    Crates: ${SELECTED_CRATES[*]}"
+podman build -t "$IMAGE" -f "$DOCKERFILE" --build-arg PACKAGES="$PACKAGES" .
 
 echo "==> Extracting binaries..."
 podman create --name "$CONTAINER" "$IMAGE"

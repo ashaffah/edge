@@ -23,4 +23,6 @@ ENV AR_armv7_unknown_linux_musleabihf=arm-linux-musleabihf-ar
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release --target armv7-unknown-linux-musleabihf
+# Space-separated cargo package flags, set by build.sh (e.g. "-p edge-client").
+ARG PACKAGES="--workspace"
+RUN cargo build --release --target armv7-unknown-linux-musleabihf $PACKAGES
