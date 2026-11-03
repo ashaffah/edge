@@ -1,13 +1,13 @@
-//! Heartbeat track feature: subscribe ke `{base}/{machine}/heartbeat` per
-//! mesin, persist status (connected/disconnected) ke storage.
+//! Heartbeat track feature: subscribe to `{base}/{machine}/heartbeat` for each
+//! machine and persist the status (connected/disconnected) to storage.
 //!
-//! Edge-client publish:
-//!   - Periodik (mis. tiap 10s): `{"status": "connected"}`
-//!   - Sebagai LWT (auto-publish saat client disconnect): `{"status": "disconnected"}`
+//! edge-client publishes:
+//!   - periodically: `{"status": "connected"}`
+//!   - as its LWT, sent by the broker when the client drops: `{"status": "disconnected"}`
 //!
-//! Middleware route topic ini via `owns_topic` di routing main.rs, sebelum
-//! fall-through ke `telemetry_ingest` (yang akan reject karena tidak ada di
-//! TopicIndex).
+//! main.rs routes these topics here through `owns_topic` before falling
+//! through to `telemetry_ingest`, which would reject them because they are
+//! not in the TopicIndex.
 
 mod handler;
 
@@ -26,44 +26,45 @@ use crate::shared::time::now_ms;
 
 const HEARTBEAT_SUFFIX: &str = "/heartbeat";
 
-/// Payload yang di-publish (retained) saat staleness menandai mesin offline,
-/// supaya retained MQTT konsisten dengan history Scylla. Match contract
+/// Payload published (retained) when staleness marks a machine offline, so the
+/// retained MQTT value matches the Scylla history. Same payload as the
 /// edge-client LWT.
 const DISCONNECTED_PAYLOAD: &[u8] = br#"{"status":"disconnected"}"#;
 
-/// Sebuah mesin dianggap offline kalau tidak ada heartbeat `connected` lebih
-/// lama dari ini. Edge-client publish tiap 1 detik, jadi 5s = ~5 beat hilang.
-/// LWT meng-cover machine_id primer secara instan; staleness ini meng-cover
-/// SEMUA mesin (termasuk mesin sekunder di instance multi-PLC yang tidak punya
-/// LWT sendiri). Promote ke env var kalau perlu per-deploy.
+/// A machine is considered offline when no `connected` heartbeat arrived for
+/// longer than this. edge-client publishes every second, so 5s is about 5
+/// missed beats. The LWT covers the primary machine_id immediately; this
+/// covers every machine, including secondary machines of a multi-PLC instance
+/// that have no LWT of their own. Move to an env var if deployments need
+/// different values.
 const OFFLINE_AFTER: Duration = Duration::from_secs(5);
-/// Seberapa sering scan liveness map untuk deteksi mesin basi.
+/// How often the liveness map is scanned for stale machines.
 const CHECK_EVERY: Duration = Duration::from_secs(2);
 
-/// State liveness per mesin untuk deteksi offline berbasis staleness.
+/// Per-machine liveness state for staleness-based offline detection.
 struct Liveness {
-    /// Kapan terakhir terima heartbeat `connected`.
+    /// When the last `connected` heartbeat arrived.
     last_seen: Instant,
-    /// Apakah saat ini dianggap online. Dipakai supaya transisi → offline
-    /// hanya di-record sekali (tidak spam disconnected tiap scan).
+    /// Whether the machine is currently considered online, so the transition to
+    /// offline is recorded once instead of on every scan.
     online: bool,
 }
 
-/// Service handle. Cheap to clone (cuma Arc).
+/// Service handle. Cheap to clone (only Arcs).
 #[derive(Clone)]
 pub struct HeartbeatTrackService {
-    /// Prefix `{base_topic}/` — pre-formatted untuk fast prefix check.
+    /// Pre-formatted `{base_topic}/` prefix for a fast prefix check.
     base_prefix: Arc<String>,
-    /// Set mesin yang valid (dari `MQTT_MACHINES`). Topic dari mesin di luar
-    /// set ini di-reject di `owns_topic`.
+    /// Known machines (from the mapping). `owns_topic` rejects topics of any
+    /// other machine.
     machines: Arc<HashSet<String>>,
     storage: Arc<dyn StorageRepo>,
-    /// Publisher untuk menimpa retained heartbeat jadi `disconnected` saat
-    /// staleness — supaya retained MQTT tidak stuck `connected` untuk mesin
-    /// sekunder yang tidak punya LWT sendiri.
+    /// Used to overwrite the retained heartbeat with `disconnected` on
+    /// staleness, so it does not stay `connected` for secondary machines that
+    /// have no LWT of their own.
     publisher: Arc<dyn MqttPublisher>,
     publish_qos: i32,
-    /// Last-seen tracker per mesin untuk staleness offline detection.
+    /// Per-machine last-seen tracker for staleness detection.
     liveness: Arc<Mutex<HashMap<String, Liveness>>>,
 }
 
@@ -85,7 +86,7 @@ impl HeartbeatTrackService {
         }
     }
 
-    /// Update liveness tracker dari hasil parse heartbeat.
+    /// Update the liveness tracker from a parsed heartbeat.
     fn update_liveness(&self, machine: &str, connected: bool) {
         let mut map = self.liveness.lock().unwrap();
         let entry = map.entry(machine.to_string()).or_insert(Liveness {
@@ -96,18 +97,17 @@ impl HeartbeatTrackService {
         entry.online = connected;
     }
 
-    /// Loop background: tandai mesin `disconnected` kalau heartbeat-nya basi
-    /// (> `OFFLINE_AFTER`). Hanya bertindak pada mesin yang pernah online, dan
-    /// hanya sekali per transisi → tidak spam. Embed di `tokio::spawn` di main.
+    /// Background loop: mark a machine `disconnected` when its heartbeat is
+    /// older than `OFFLINE_AFTER`. Only acts on machines that were online, and
+    /// once per transition. main.rs runs it in `tokio::spawn`.
     pub async fn run_staleness_monitor(self) {
         let mut ticker = tokio::time::interval(CHECK_EVERY);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             ticker.tick().await;
             let now = Instant::now();
-            // Kumpulkan mesin basi di dalam lock, lalu lepas lock sebelum
-            // record (record_heartbeat fire-and-forget, tapi tetap jaga supaya
-            // tidak ada lock yang hidup lewat boundary kerja lain).
+            // Collect stale machines under the lock and release it before
+            // recording, so the lock is never held across other work.
             let mut stale: Vec<String> = Vec::new();
             {
                 let mut map = self.liveness.lock().unwrap();
@@ -125,29 +125,29 @@ impl HeartbeatTrackService {
                     status: "disconnected".to_string(),
                     ts_ms: now_ms(),
                 });
-                // Timpa retained heartbeat di broker → subscriber MQTT baru
-                // (dashboard) tidak lihat `connected` basi. Mesin primer juga
-                // dapat ini (redundan dengan LWT, tapi harmless).
+                // Overwrite the retained heartbeat so a new MQTT subscriber
+                // (dashboard) does not see a stale `connected`. Primary machines
+                // get this too, which duplicates the LWT but does no harm.
                 let topic = format!("{}{}/heartbeat", self.base_prefix, machine);
                 if let Err(e) = self
                     .publisher
                     .publish(&topic, DISCONNECTED_PAYLOAD, self.publish_qos, true)
                     .await
                 {
-                    warn!(%topic, "publish retained disconnected gagal: {e:#}");
+                    warn!(%topic, "publish retained disconnected failed: {e:#}");
                 }
             }
         }
     }
 
-    /// True kalau topic ini milik service (untuk routing di main.rs).
-    /// Topic shape valid: `{base}/{machine}/heartbeat` dengan machine ∈ MQTT_MACHINES.
+    /// True if this service owns the topic (for routing in main.rs).
+    /// Valid shape: `{base}/{machine}/heartbeat` where machine is in the mapping.
     pub fn owns_topic(&self, topic: &str) -> bool {
         self.extract_machine(topic).is_some()
     }
 
-    /// Ekstrak nama machine dari topic. None kalau topic tidak match shape
-    /// atau machine tidak dikenal.
+    /// Extract the machine from the topic. None if the shape does not match or
+    /// the machine is unknown.
     fn extract_machine<'a>(&self, topic: &'a str) -> Option<&'a str> {
         let middle = topic
             .strip_prefix(self.base_prefix.as_str())?
@@ -159,8 +159,8 @@ impl HeartbeatTrackService {
         }
     }
 
-    /// Proses satu pesan masuk. Caller (main loop) sudah panggil `owns_topic`
-    /// untuk filter; di sini kita re-extract machine (tidak ekspensif).
+    /// Process one incoming message. The caller already filtered with
+    /// `owns_topic`; the machine is extracted again here (cheap).
     pub fn handle(&self, topic: &str, payload: &str) {
         if let Some(machine) = self.extract_machine(topic)
             && let Some(connected) =
@@ -168,11 +168,10 @@ impl HeartbeatTrackService {
         {
             self.update_liveness(machine, connected);
         }
-        // Else: caller tidak seharusnya panggil ini untuk topic foreign;
-        // silently drop kalau kejadian (defense in depth).
+        // The caller should not pass a foreign topic. Drop it if it does.
     }
 
-    /// Variant test-friendly: inject timestamp.
+    /// Same as `handle`, with an injected timestamp for tests.
     #[cfg(test)]
     pub fn handle_at(&self, topic: &str, payload: &str, ts_ms: i64) {
         if let Some(machine) = self.extract_machine(topic)

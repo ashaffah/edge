@@ -1,4 +1,4 @@
-//! Wire format untuk command channel: payload masuk + ack keluar.
+//! Wire format of the command channel: incoming payload and outgoing ack.
 
 use serde::{Deserialize, Serialize};
 

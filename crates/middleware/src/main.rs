@@ -1,6 +1,5 @@
-//! Entry point: load settings, connect ke infrastruktur, wire feature
-//! services dengan dependency injection, route pesan MQTT ke service yang
-//! relevan.
+//! Entry point: load settings, connect to the infrastructure, build the
+//! feature services and route each MQTT message to the service that owns it.
 
 use anyhow::{Context, Result};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS, Transport};
@@ -64,9 +63,9 @@ async fn main() -> Result<()> {
     };
 
     // -------- Infra: MQTT client --------
-    // Pakai MqttOptions::new + set_transport manual (bukan parse_url) karena
-    // rumqttc 0.25 parse_url untuk ws/wss tidak preserve scheme → WS handshake
-    // gagal (issue rumqttc#808).
+    // Use MqttOptions::new with an explicit set_transport instead of parse_url:
+    // in rumqttc 0.25 parse_url drops the ws/wss scheme and the WebSocket
+    // handshake fails (rumqttc#808).
     let m = &settings.mqtt;
     let ws_path = m.websocket_path.as_deref().unwrap_or("/mqtt");
 
@@ -81,7 +80,7 @@ async fn main() -> Result<()> {
             format!("wss://{}:{}{}", m.host, m.port, ws_path),
             Some(Transport::wss_with_default_config()),
         ),
-        other => anyhow::bail!("MQTT_PROTOCOL '{other}' tidak dikenal (mqtt/mqtts/ws/wss)"),
+        other => anyhow::bail!("unknown MQTT_PROTOCOL '{other}' (mqtt/mqtts/ws/wss)"),
     };
 
     let mut opts = MqttOptions::new(&m.client_id, &host_arg, m.port);
@@ -94,16 +93,16 @@ async fn main() -> Result<()> {
 
     let (client, mut eventloop) = AsyncClient::new(opts, 1024);
 
-    // Helper konversi i32 QoS → rumqttc enum
+    // Convert an i32 QoS to the rumqttc enum
     let to_qos = |q: i32| match q {
         0 => QoS::AtMostOnce,
         2 => QoS::ExactlyOnce,
         _ => QoS::AtLeastOnce,
     };
 
-    // Subscribe patterns: telemetry (per mesin) + command (global)
+    // Subscribe patterns: telemetry (one per machine) and command (global)
     let mut patterns = settings.subscribe_patterns();
-    // cmd pattern = "{base_topic}/cmd/#" — sama dengan CommandDispatchService::subscribe_pattern()
+    // Same as CommandDispatchService::subscribe_pattern()
     patterns.push(format!("{}/cmd/#", settings.base_topic));
     let qos_list: Vec<QoS> = patterns
         .iter()
@@ -117,8 +116,8 @@ async fn main() -> Result<()> {
         })
         .collect();
 
-    // Fungsi subscribe ulang — dipanggil saat ConnAck (initial + reconnect).
-    // clean_session=true → broker buang semua subscription saat disconnect.
+    // Called on every ConnAck (first connect and reconnect). With
+    // clean_session=true the broker drops all subscriptions on disconnect.
     let subscribe_all = {
         let patterns = patterns.clone();
         let qos_list = qos_list.clone();
@@ -129,7 +128,7 @@ async fn main() -> Result<()> {
             tokio::spawn(async move {
                 for (pat, qos) in patterns.iter().zip(qos_list.iter()) {
                     if let Err(e) = c.subscribe(pat, *qos).await {
-                        warn!(%pat, "subscribe gagal: {e:#}");
+                        warn!(%pat, "subscribe failed: {e:#}");
                     }
                 }
                 info!(?patterns, "subscribed");
@@ -165,9 +164,10 @@ async fn main() -> Result<()> {
     let resource_track =
         ResourceTrackService::new(&settings.base_topic, &settings.machines, storage.clone());
 
-    // Background: tandai mesin offline kalau heartbeat-nya basi. Meng-cover
-    // mesin sekunder (multi-PLC per instance edge-client) yang tidak punya LWT
-    // sendiri — LWT hanya untuk machine_id primer tiap koneksi.
+    // Background: mark a machine offline when its heartbeat goes stale. This
+    // covers secondary machines (multi-PLC per edge-client instance), which
+    // have no LWT of their own: the LWT only covers the primary machine_id
+    // of each connection.
     tokio::spawn(heartbeat_track.clone().run_staleness_monitor());
 
     // -------- Event loop --------
@@ -193,9 +193,9 @@ async fn main() -> Result<()> {
                     telemetry_ingest.handle(topic, &payload);
                 }
             }
-            Ok(_) => {} // PingReq, PingResp, SubAck, dll — diabaikan
+            Ok(_) => {} // PingReq, PingResp, SubAck, etc. are ignored
             Err(e) => {
-                warn!("MQTT event loop error: {e:#} — reconnect otomatis");
+                warn!("MQTT event loop error: {e:#} — reconnecting");
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
         }

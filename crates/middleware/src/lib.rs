@@ -1,11 +1,11 @@
-//! iot-middleware: MQTT ↔ ScyllaDB bridge untuk vakum KGI Sier.
+//! iot-middleware: bridge between MQTT and ScyllaDB.
 //!
-//! Struktur:
-//!   - `shared/`: infrastruktur (settings, mapping, storage trait+impl, mqtt publisher).
-//!   - `features/`: business logic per fitur (telemetry_ingest, command_dispatch).
+//! Layout:
+//!   - `shared/`: infrastructure (settings, storage trait and impl, MQTT publisher, cache).
+//!   - `features/`: business logic, one module per feature (telemetry_ingest, command_dispatch, ...).
 //!
-//! Feature service di-konstruksi di binary entry (`main.rs`) dengan
-//! dependency injection: shared infra di-pass sebagai `Arc<dyn Trait>`.
+//! Feature services are built in `main.rs`, which passes the shared
+//! infrastructure in as `Arc<dyn Trait>`.
 
 pub mod features;
 pub mod shared;

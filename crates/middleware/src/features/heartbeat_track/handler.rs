@@ -1,27 +1,26 @@
-//! Pure handler: terima heartbeat message → parse JSON → record ke storage.
+//! Pure handler: parse a heartbeat message and record it to storage.
 //!
-//! Tidak nyentuh MQTT/Scylla langsung; semua via trait. Mirror pola
-//! `telemetry_ingest::handler` supaya konsisten.
+//! No direct MQTT or Scylla access, only traits. Same shape as
+//! `telemetry_ingest::handler`.
 
 use serde::Deserialize;
 use tracing::{debug, warn};
 
 use crate::shared::storage::{HeartbeatRow, StorageRepo};
 
-/// Payload heartbeat dari edge-client:
-/// `{"status": "connected"}` saat alive, `{"status": "disconnected"}` saat
-/// LWT (last-will-testament) di broker.
+/// Heartbeat payload from edge-client: `{"status": "connected"}` while alive,
+/// `{"status": "disconnected"}` as the LWT (last will and testament) sent by the broker.
 #[derive(Debug, Deserialize)]
 struct HeartbeatPayload {
     status: String,
 }
 
-/// Proses satu heartbeat message. Caller (service) sudah validasi bahwa
-/// `machine` ada di daftar yang diizinkan, dan sudah ekstrak dari topic.
+/// Process one heartbeat message. The caller (service) already extracted
+/// `machine` from the topic and checked that it is known.
 ///
-/// Return `Some(true)` kalau status `connected`, `Some(false)` kalau
-/// `disconnected`, `None` kalau payload invalid / status tidak dikenal
-/// (tidak di-record). Caller pakai nilai ini untuk update liveness tracker.
+/// Returns `Some(true)` for `connected`, `Some(false)` for `disconnected`, and
+/// `None` for an invalid payload or unknown status (not recorded). The caller
+/// uses the value to update the liveness tracker.
 pub fn handle(storage: &dyn StorageRepo, machine: &str, payload: &str, ts_ms: i64) -> Option<bool> {
     let parsed: HeartbeatPayload = match serde_json::from_str(payload) {
         Ok(p) => p,
@@ -31,8 +30,8 @@ pub fn handle(storage: &dyn StorageRepo, machine: &str, payload: &str, ts_ms: i6
         }
     };
 
-    // Sanitasi: status harus salah satu nilai yang diakui. Yang tidak diakui
-    // di-warn tapi tetap drop supaya tidak corrupt data history.
+    // Only known status values are stored. Anything else is logged and
+    // dropped so it does not end up in the history.
     let connected = match parsed.status.as_str() {
         "connected" => true,
         "disconnected" => false,

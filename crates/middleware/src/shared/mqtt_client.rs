@@ -1,8 +1,8 @@
 //! MQTT publish abstraction.
 //!
-//! Feature dispatcher publish ke `dyn MqttPublisher`. Production injects
-//! `RumqttcPublisher` (wrapper tipis di rumqttc::AsyncClient). Test inject
-//! mock yang record call ke `Vec`.
+//! Features publish through `dyn MqttPublisher`. Production injects
+//! `RumqttcPublisher` (a thin wrapper over rumqttc::AsyncClient). Tests
+//! inject a mock that records calls in a `Vec`.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -10,15 +10,15 @@ use rumqttc::{AsyncClient, QoS};
 
 #[async_trait]
 pub trait MqttPublisher: Send + Sync {
-    /// Publish payload ke topic dengan QoS yang ditentukan. `retain=true`
-    /// menyuruh broker simpan payload sebagai last-value topic (untuk status
-    /// topic seperti heartbeat). Command/set/ack → `retain=false`. Mengembalikan
-    /// Ok setelah broker acknowledge (untuk QoS 1+) atau immediately (QoS 0).
+    /// Publish a payload to a topic with the given QoS. `retain=true` makes the
+    /// broker keep it as the topic's last value (for status topics such as
+    /// heartbeat). Command, set and ack use `retain=false`. Returns once the
+    /// request is queued on the client.
     async fn publish(&self, topic: &str, payload: &[u8], qos: i32, retain: bool) -> Result<()>;
 }
 
-/// Production impl yang membungkus rumqttc AsyncClient.
-/// AsyncClient itu sendiri sudah `Arc<inner>` jadi cheap-clone.
+/// Production implementation over rumqttc AsyncClient.
+/// AsyncClient is already an `Arc` internally, so cloning it is cheap.
 #[derive(Clone)]
 pub struct RumqttcPublisher {
     client: AsyncClient,

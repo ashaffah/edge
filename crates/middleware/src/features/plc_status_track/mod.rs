@@ -1,19 +1,18 @@
-//! PLC status track feature: subscribe ke `{base}/{machine}/plc/status` per
-//! mesin, persist status koneksi Modbus edge↔PLC ke storage.
+//! PLC status track feature: subscribe to `{base}/{machine}/plc/status` for
+//! each machine and persist the edge to PLC Modbus link status to storage.
 //!
-//! Edge-client publish (lihat `edge-client/src/telemetry.rs`):
-//!   - `{"status": "connected"}` — saat Modbus reader bisa baca PLC.
-//!   - `{"status": "disconnected"}` — saat connect gagal atau read error
-//!     mid-poll (retained, supaya subscriber baru langsung dapat last state).
+//! edge-client publishes (see `plc_status.rs` in edge-client):
+//!   - `{"status": "connected"}` while the Modbus reader can read the PLC.
+//!   - `{"status": "disconnected"}` when connecting or a read fails.
 //!
-//! Beda dari `heartbeat_track`: heartbeat = edge↔MQTT broker, plc_status =
-//! edge↔Modbus PLC. State paling kritikal: heartbeat connected + plc_status
-//! disconnected = "edge running but plant blind". Disimpan terpisah supaya
-//! dashboard bisa bedakan.
+//! Heartbeat covers edge to MQTT broker, plc_status covers edge to PLC. The
+//! case that matters most is a connected heartbeat with a disconnected PLC:
+//! the edge runs but reads nothing. They are stored separately so a dashboard
+//! can tell them apart.
 //!
-//! Middleware route topic ini via `owns_topic` di routing main.rs, sebelum
-//! fall-through ke `telemetry_ingest` (yang akan reject karena tidak ada di
-//! TopicIndex).
+//! main.rs routes these topics here through `owns_topic` before falling
+//! through to `telemetry_ingest`, which would reject them because they are
+//! not in the TopicIndex.
 
 mod handler;
 
@@ -28,13 +27,13 @@ use crate::shared::time::now_ms;
 
 const PLC_STATUS_SUFFIX: &str = "/plc/status";
 
-/// Service handle. Cheap to clone (cuma Arc).
+/// Service handle. Cheap to clone (only Arcs).
 #[derive(Clone)]
 pub struct PlcStatusTrackService {
-    /// Prefix `{base_topic}/` — pre-formatted untuk fast prefix check.
+    /// Pre-formatted `{base_topic}/` prefix for a fast prefix check.
     base_prefix: Arc<String>,
-    /// Set mesin yang valid (dari `MQTT_MACHINES`). Topic dari mesin di luar
-    /// set ini di-reject di `owns_topic`.
+    /// Known machines (from the mapping). `owns_topic` rejects topics of any
+    /// other machine.
     machines: Arc<HashSet<String>>,
     storage: Arc<dyn StorageRepo>,
 }
@@ -48,14 +47,14 @@ impl PlcStatusTrackService {
         }
     }
 
-    /// True kalau topic ini milik service. Shape valid:
-    /// `{base}/{machine}/plc/status` dengan machine ∈ MQTT_MACHINES.
+    /// True if this service owns the topic. Valid shape:
+    /// `{base}/{machine}/plc/status` where machine is in the mapping.
     pub fn owns_topic(&self, topic: &str) -> bool {
         self.extract_machine(topic).is_some()
     }
 
-    /// Ekstrak nama machine dari topic. None kalau topic tidak match shape
-    /// atau machine tidak dikenal.
+    /// Extract the machine from the topic. None if the shape does not match or
+    /// the machine is unknown.
     fn extract_machine<'a>(&self, topic: &'a str) -> Option<&'a str> {
         let middle = topic
             .strip_prefix(self.base_prefix.as_str())?
@@ -67,17 +66,16 @@ impl PlcStatusTrackService {
         }
     }
 
-    /// Proses satu pesan masuk. Caller (main loop) sudah panggil `owns_topic`
-    /// untuk filter; di sini kita re-extract machine (tidak ekspensif).
+    /// Process one incoming message. The caller already filtered with
+    /// `owns_topic`; the machine is extracted again here (cheap).
     pub fn handle(&self, topic: &str, payload: &str) {
         if let Some(machine) = self.extract_machine(topic) {
             handler::handle(self.storage.as_ref(), machine, payload, now_ms());
         }
-        // Else: caller tidak seharusnya panggil ini untuk topic foreign;
-        // silently drop kalau kejadian (defense in depth).
+        // The caller should not pass a foreign topic. Drop it if it does.
     }
 
-    /// Variant test-friendly: inject timestamp.
+    /// Same as `handle`, with an injected timestamp for tests.
     #[cfg(test)]
     pub fn handle_at(&self, topic: &str, payload: &str, ts_ms: i64) {
         if let Some(machine) = self.extract_machine(topic) {

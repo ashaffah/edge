@@ -1,8 +1,9 @@
-//! Konfigurasi runtime: load dari env (.env auto-load kalau ada) + JSON mapping.
+//! Runtime configuration: env (a `.env` file is loaded if present) plus the
+//! JSON mapping.
 //!
-//! Settings ini dibangun sekali di startup oleh `main.rs`, lalu komponen
-//! lain terima sub-struct (`MqttSettings`, `ScyllaSettings`) lewat parameter.
-//! Tidak ada akses env variable di luar file ini.
+//! `main.rs` builds `Settings` once at startup and passes the sub-structs
+//! (`MqttSettings`, `ScyllaSettings`) to the components that need them.
+//! Nothing outside this file reads env variables.
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, de::DeserializeOwned};
@@ -55,8 +56,8 @@ pub struct ScyllaSettings {
     pub telemetry_concurrency: usize,
 }
 
-/// Cache settings. Kalau `url` kosong, middleware pakai `NoOpCache`
-/// (cache disabled — bisa untuk dev/CI tanpa Valkey hidup).
+/// Cache settings. With an empty `url` the middleware uses `NoOpCache`
+/// (cache disabled, useful for dev and CI without a running Valkey).
 #[derive(Debug, Clone)]
 pub struct CacheSettings {
     pub url: String,
@@ -118,7 +119,7 @@ impl Settings {
         )
     }
 
-    /// Wildcard pattern subscribe untuk telemetry: 1 per mesin.
+    /// Telemetry subscribe patterns, one wildcard per machine.
     pub fn subscribe_patterns(&self) -> Vec<String> {
         self.machines
             .iter()
@@ -189,7 +190,7 @@ fn load_scylla_settings() -> Result<ScyllaSettings> {
 }
 
 fn load_cache_settings() -> Result<CacheSettings> {
-    // URL kosong = cache disabled (NoOpCache).
+    // Empty URL means cache disabled (NoOpCache).
     let url = optional("CACHE_URL", "");
     Ok(CacheSettings {
         url,
@@ -203,8 +204,8 @@ fn load_cache_settings() -> Result<CacheSettings> {
     })
 }
 
-/// `path` boleh file tunggal (`MiddlewareMapping`) atau folder: `_base.json`
-/// berisi `base_topic`, tiap `*.json` lain berisi satu `MwDevice`.
+/// `path` is either a single file (`MiddlewareMapping`) or a directory where
+/// `_base.json` holds `base_topic` and every other `*.json` holds one `MwDevice`.
 fn load_mapping(path: impl AsRef<Path>) -> Result<MiddlewareMapping> {
     let path = path.as_ref();
     let mapping = if path.is_dir() {
@@ -213,8 +214,8 @@ fn load_mapping(path: impl AsRef<Path>) -> Result<MiddlewareMapping> {
         read_json(path)?
     };
 
-    // File per mesin biasanya dibuat dengan copy file lain, jadi location/name
-    // yang lupa diganti harus gagal di startup, bukan diam-diam bentrok topic.
+    // Per-machine files are usually made by copying another one. A location/name
+    // left unchanged must fail at startup instead of silently sharing topics.
     let mut seen = HashSet::new();
     for d in &mapping.devices {
         if !seen.insert((d.location.as_str(), d.name.as_str())) {
@@ -252,7 +253,7 @@ fn load_mapping_dir(dir: &Path) -> Result<MiddlewareMapping> {
     if device_files.is_empty() {
         bail!("no device *.json in mapping dir: {}", dir.display());
     }
-    // read_dir tidak menjamin urutan; urut nama supaya log & index stabil.
+    // read_dir has no guaranteed order. Sort by name so logs and the index are stable.
     device_files.sort();
 
     let devices = device_files
@@ -332,7 +333,7 @@ mod tests {
                 ),
                 ("area2.json", &area2),
                 ("area1.json", DEVICE_AREA1),
-                ("README.md", "bukan mapping"),
+                ("README.md", "not a mapping"),
             ],
         );
         let m = load_mapping(&dir).unwrap();

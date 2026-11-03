@@ -1,5 +1,5 @@
-//! Tests untuk command dispatch. Pakai dua manual mock:
-//!   - MockStorage: configurable current values + umur (untuk dedup), record record_*.
+//! Tests for command dispatch, with two hand-written mocks:
+//!   - MockStorage: configurable current values and age (for dedup), records record_*.
 //!   - MockPublisher: record (topic, payload, qos).
 
 use super::*;
@@ -29,7 +29,7 @@ struct MockStorage {
 }
 
 impl MockStorage {
-    /// Simulasi readback: nilai current dengan umur `age_ms`.
+    /// Simulated readback: a current value that is `age_ms` old.
     fn set_setpoint(&self, machine: &str, key: &str, value: f64, age_ms: i64) {
         self.setpoint_current.lock().unwrap().insert(
             (machine.to_string(), key.to_string()),
@@ -54,7 +54,7 @@ impl MockStorage {
 #[async_trait]
 impl StorageRepo for MockStorage {
     fn record_telemetry(&self, _row: TelemetryRow) {
-        // Tidak relevan untuk command dispatch.
+        // Not used by command dispatch.
     }
     fn record_setpoint_history(&self, row: SetpointRow) {
         self.setpoint_history.lock().unwrap().push(row);
@@ -75,13 +75,13 @@ impl StorageRepo for MockStorage {
             .insert((row.machine, row.key), (row.state, row.ts_ms));
     }
     fn record_heartbeat(&self, _row: HeartbeatRow) {
-        // Tidak relevan untuk command dispatch.
+        // Not used by command dispatch.
     }
     fn record_plc_status(&self, _row: PlcStatusRow) {
-        // Tidak relevan untuk command dispatch.
+        // Not used by command dispatch.
     }
     fn record_resource(&self, _row: ResourceRow) {
-        // Tidak relevan untuk command dispatch.
+        // Not used by command dispatch.
     }
     async fn read_setpoint_current(&self, machine: &str, key: &str) -> Result<Option<(f64, i64)>> {
         Ok(self
@@ -102,7 +102,7 @@ impl StorageRepo for MockStorage {
 }
 
 // ---------------------------------------------------------------------------
-// MockPublisher — record semua publish.
+// MockPublisher: records every publish.
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
@@ -169,7 +169,7 @@ fn fixture() -> (CommandDispatchService, Arc<MockStorage>, Arc<MockPublisher>) {
     (service, storage, publisher)
 }
 
-/// Umur state yang sudah lewat batas dedup.
+/// A state age past the dedup limit.
 const STALE_MS: i64 = STATE_MAX_AGE_MS + 1_000;
 
 // ---------------------------------------------------------------------------
@@ -196,37 +196,37 @@ fn owns_topic_matches_cmd_prefix() {
 
 #[tokio::test]
 async fn set_dispatches_publishes_to_plc_and_records_history() {
-    // Happy path: nilai baru → publish ke edge PLC topic + catat history.
+    // Happy path: a new value is published to the edge PLC topic and recorded in history.
     let (service, storage, publisher) = fixture();
     let cmd = br#"{"value": 80.0, "request_id": "req-1"}"#;
     service
         .dispatch_sync("acme/site/cmd/area1/machine_a/set/temp/main", cmd)
         .await
-        .expect("set dispatch harus sukses");
+        .expect("set dispatch should succeed");
 
     let calls = publisher.calls();
-    // Publish 1: ke PLC topic edge-client. Publish 2: ack.
-    assert_eq!(calls.len(), 2, "harus ada 2 publish: PLC + ack");
+    // Publish 1: edge-client PLC topic. Publish 2: ack.
+    assert_eq!(calls.len(), 2, "expected 2 publishes: PLC and ack");
     assert_eq!(
         calls[0].0, "acme/site/area1/machine_a/set/temp/main",
-        "publish pertama harus ke edge PLC topic"
+        "first publish should go to the edge PLC topic"
     );
     assert_eq!(
         calls[1].0, "acme/site/ack/req-1",
-        "publish kedua harus ke ack topic"
+        "second publish should go to the ack topic"
     );
     let history = storage.setpoint_history.lock().unwrap();
-    assert_eq!(history.len(), 1, "harus tulis 1 row ke setpoint_history");
+    assert_eq!(history.len(), 1, "expected 1 row in setpoint_history");
     assert_eq!(history[0].value, 80.0);
     assert!(
         storage.setpoint_current.lock().unwrap().is_empty(),
-        "command tidak boleh menulis setpoint_current (hanya readback)"
+        "a command must not write setpoint_current (readback only)"
     );
 }
 
 #[tokio::test]
 async fn set_dedup_skips_when_fresh_state_same_value() {
-    // Readback segar dengan nilai sama → skip publish PLC + skip history.
+    // Fresh readback with the same value: no PLC publish and no history row.
     let (service, storage, publisher) = fixture();
     storage.set_setpoint("area1/machine_a", "set_temp_main_pot", 70.0, 0);
 
@@ -234,22 +234,22 @@ async fn set_dedup_skips_when_fresh_state_same_value() {
     service
         .dispatch_sync("acme/site/cmd/area1/machine_a/set/temp/main", cmd)
         .await
-        .expect("dedup skip harus return Ok");
+        .expect("dedup skip should return Ok");
 
     let calls = publisher.calls();
-    // Hanya ack "skipped" — tidak ada publish ke PLC.
-    assert_eq!(calls.len(), 1, "hanya ack yang di-publish saat dedup");
+    // Only the "skipped" ack, no PLC publish.
+    assert_eq!(calls.len(), 1, "only the ack is published on dedup");
     assert_eq!(calls[0].0, "acme/site/ack/req-dup");
     assert_eq!(
         storage.setpoint_history.lock().unwrap().len(),
         0,
-        "tidak boleh tulis history saat dedup"
+        "no history row on dedup"
     );
 }
 
 #[tokio::test]
 async fn set_forwards_when_state_stale_even_if_same_value() {
-    // Readback basi (edge mati / row lama) → state tidak diketahui, forward.
+    // Stale readback (edge down or old row): state unknown, so forward.
     let (service, storage, publisher) = fixture();
     storage.set_setpoint("area1/machine_a", "set_temp_main_pot", 70.0, STALE_MS);
 
@@ -266,7 +266,7 @@ async fn set_forwards_when_state_stale_even_if_same_value() {
 
 #[tokio::test]
 async fn set_integer_rejects_fractional_value() {
-    // Integer-typed param + fractional payload → Err (validasi di value_as_f64).
+    // Integer param with a fractional payload is an error (checked in value_as_f64).
     let (service, _, publisher) = fixture();
     let cmd = br#"{"value": 3.5, "request_id": "req-frac"}"#;
     let res = service
@@ -274,9 +274,9 @@ async fn set_integer_rejects_fractional_value() {
         .await;
     assert!(
         res.is_err(),
-        "fractional value untuk integer param harus Err"
+        "fractional value for an integer param should be Err"
     );
-    assert_eq!(publisher.calls().len(), 0, "tidak boleh publish saat error");
+    assert_eq!(publisher.calls().len(), 0, "nothing is published on error");
 }
 
 // ---------------------------------------------------------------------------
@@ -303,13 +303,13 @@ async fn control_publishes_when_state_changes() {
     assert_eq!(
         storage.actuator_state("area1/machine_a", "control_lamp"),
         Some(false),
-        "command tidak boleh menimpa actuator_current (hanya readback)"
+        "a command must not overwrite actuator_current (readback only)"
     );
 }
 
 #[tokio::test]
 async fn control_skips_when_fresh_state_unchanged() {
-    // Mis. lampu sudah dinyalakan dari HMI: readback true → command true di-skip.
+    // E.g. the lamp was already switched on from the HMI: readback true, so command true is skipped.
     let (service, storage, publisher) = fixture();
     storage.set_actuator("area1/machine_a", "control_lamp", true, 0);
 
@@ -320,7 +320,7 @@ async fn control_skips_when_fresh_state_unchanged() {
         .unwrap();
 
     let calls = publisher.calls();
-    // Hanya ack "skipped".
+    // Only the "skipped" ack.
     assert_eq!(calls.len(), 1);
     let ack: serde_json::Value = serde_json::from_slice(&calls[0].1).unwrap();
     assert_eq!(ack["status"], "skipped");
@@ -339,15 +339,15 @@ async fn control_forwards_when_state_stale() {
         .unwrap();
 
     let calls = publisher.calls();
-    assert_eq!(calls.len(), 2, "state basi: PLC + ack");
+    assert_eq!(calls.len(), 2, "stale state: PLC and ack");
     assert_eq!(calls[0].1, b"1");
 }
 
 #[tokio::test]
 async fn control_resend_after_gate_deny_is_forwarded_again() {
-    // Command pertama di-forward tapi di-deny gate di edge: PLC tetap off,
-    // readback tetap false. Kirim ulang nilai yang sama harus di-forward lagi,
-    // bukan di-skip dedup.
+    // The first command was forwarded but denied by the gate on the edge, so the
+    // PLC stays off and readback stays false. Resending the same value must be
+    // forwarded again, not skipped by dedup.
     let (service, storage, publisher) = fixture();
     storage.set_actuator("area1/machine_a", "control_lamp", false, 0);
 
@@ -401,6 +401,6 @@ async fn no_request_id_no_ack() {
         .unwrap();
 
     let calls = publisher.calls();
-    // Cuma 1 publish (ke PLC), no ack.
+    // Only 1 publish (to the PLC), no ack.
     assert_eq!(calls.len(), 1);
 }

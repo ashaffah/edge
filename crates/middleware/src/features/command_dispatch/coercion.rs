@@ -19,7 +19,7 @@ pub fn value_as_f64(v: &serde_json::Value, expected: DataType) -> Result<f64> {
             Ok(f)
         }
         DataType::Boolean => bail!("data type is boolean, not numeric"),
-        DataType::String => bail!("data type is string, tidak bisa dipakai sebagai set/control"),
+        DataType::String => bail!("data type is string, which cannot be used for set/control"),
     }
 }
 
@@ -49,7 +49,7 @@ pub fn numbers_equal(a: f64, b: f64, dt: DataType) -> bool {
         DataType::Integer => (a as i64) == (b as i64),
         DataType::Float => (a - b).abs() < 1e-6,
         DataType::Boolean => unreachable!("boolean handled separately"),
-        DataType::String => unreachable!("string tidak bisa dipakai sebagai set/control"),
+        DataType::String => unreachable!("string cannot be used for set/control"),
     }
 }
 
@@ -58,7 +58,7 @@ pub fn format_value_for_plc(v: f64, dt: DataType) -> String {
         DataType::Integer => format!("{}", v as i64),
         DataType::Float => format!("{v}"),
         DataType::Boolean => unreachable!("boolean handled separately"),
-        DataType::String => unreachable!("string tidak bisa dipakai sebagai set/control"),
+        DataType::String => unreachable!("string cannot be used for set/control"),
     }
 }
 

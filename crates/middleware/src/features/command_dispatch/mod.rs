@@ -1,28 +1,27 @@
-//! Command dispatch feature: subscribe ke command topic, validate vs index,
-//! dedup vs storage current, publish ke PLC, persist via storage.
+//! Command dispatch feature: subscribe to command topics, validate against
+//! the index, dedup against the current state in storage, publish to the PLC
+//! topic and persist through storage.
 //!
-//! # Apa yang dilakukan modul ini
+//! For every message on `{base}/cmd/#`:
+//! 1. Look the topic up in `cmd_index`. An unknown topic acks `"error"`.
+//! 2. Parse the JSON payload `{"value": ..., "request_id": "..."}`. Invalid JSON gets no
+//!    ack, since the `request_id` cannot be read.
+//! 3. Coerce the value to the entry's data type (bool for control, float/integer for set).
+//!    Failure acks `"error"`.
+//! 4. Read the current state from ScyllaDB and ack `"skipped"` if the value is unchanged.
+//!    Dedup only applies when the current row is at most [`STATE_MAX_AGE_MS`] old. The
+//!    current row is filled by the PLC readback through `telemetry_ingest`, not by commands,
+//!    so a command denied by the gate or a failed write does not change it.
+//! 5. Publish the plain string payload to the topic without `/cmd/` (edge-client listens there).
+//! 6. Record the command in the `*_history` table.
+//! 7. Ack on `{base}/ack/{request_id}`: `"ok"`, `"skipped"` or `"error"`.
 //!
-//! Untuk setiap pesan di `{base}/cmd/#`:
-//! 1. Lookup topic di `cmd_index` — kalau tidak ada, **drop** (topic tidak dikenal di mapping).
-//! 2. Parse JSON payload `{"value": ..., "request_id": "..."}` — kalau gagal, **error**.
-//! 3. Coerce value ke tipe data entry (bool untuk control, float/integer untuk set) — kalau gagal, **error**.
-//! 4. Baca state/nilai current dari ScyllaDB, **skip** (ack "skipped") kalau tidak berubah (dedup).
-//!    Dedup hanya kalau current berumur <= [`STATE_MAX_AGE_MS`]. Current diisi readback
-//!    PLC lewat `telemetry_ingest`, bukan oleh command, jadi command yang di-deny gate
-//!    atau gagal ditulis tidak mengubahnya.
-//! 5. Publish plain string payload ke topic tanpa `/cmd/` (forward ke edge-client).
-//! 6. Catat command ke `*_history` di ScyllaDB.
-//! 7. Kirim ack ke `{base}/ack/{request_id}`: `"ok"` / `"skipped"` / `"error"`.
+//! # Control gate
 //!
-//! # Gate control — TIDAK dicek di layer ini
-//!
-//! Middleware **tidak** cek control gate Valkey sebelum publish. Gate di-enforce
-//! sepenuhnya di sisi edge-client ([`crate::control_subscriber::handle_publish`]
-//! di crate edge-client) via `HGETALL control` sebelum tiap Modbus write.
-//!
-//! Ini by design: middleware adalah bridge yang tidak tahu state fisik mesin.
-//! Edge-client yang paling dekat dengan PLC dan paling tepat untuk enforce gate.
+//! The middleware does not check the Valkey control gate before publishing.
+//! edge-client enforces it (`control_subscriber::handle_publish` in the
+//! edge-client crate) with `HGETALL control` before every Modbus write, since it
+//! is the component next to the PLC.
 
 mod coercion;
 mod wire;
@@ -44,31 +43,32 @@ use edge_shared::{Category, TopicEntry, TopicIndex};
 use coercion::{format_value_for_plc, numbers_equal, value_as_bool, value_as_f64};
 use wire::{AckPayload, CommandPayload};
 
-/// Maksimum concurrent command dispatch tasks. Melindungi dari command storm
-/// (mis. client bug loop). Kalau penuh → warn + drop command.
+/// Maximum concurrent command dispatch tasks. Guards against a command storm
+/// (for example a client stuck in a loop). When full, the command is dropped
+/// with a warning.
 const DISPATCH_CONCURRENCY: usize = 16;
 
-/// Umur maksimum state readback yang dipakai untuk dedup. Lebih tua dari ini
-/// (edge mati, entry tanpa readback, atau row lama dari sebelum readback ada)
-/// dianggap tidak diketahui dan command selalu di-forward. Readback publish
-/// tiap poll cycle (1s), jadi 5s memberi ruang beberapa cycle terlewat.
+/// Maximum age of the readback state used for dedup. Anything older (edge
+/// down, entry without readback, or a row from before readback existed) is
+/// treated as unknown and the command is always forwarded. Readback is
+/// published every poll cycle (1s), so 5s allows a few missed cycles.
 pub const STATE_MAX_AGE_MS: i64 = 5_000;
 
-/// Service handle untuk command dispatching. Cheap to clone.
+/// Service handle for command dispatch. Cheap to clone.
 #[derive(Clone)]
 pub struct CommandDispatchService {
     base_topic: Arc<String>,
     storage: Arc<dyn StorageRepo>,
     publisher: Arc<dyn MqttPublisher>,
-    /// Lookup: command topic ({base}/cmd/{machine}/{tail}) → entry tujuan.
+    /// Maps a command topic ({base}/cmd/{machine}/{tail}) to its target entry.
     cmd_index: Arc<HashMap<String, TopicEntry>>,
     publish_qos: i32,
-    /// Semaphore untuk bound concurrent dispatch tasks.
+    /// Bounds the number of concurrent dispatch tasks.
     dispatch_sem: Arc<Semaphore>,
 }
 
 impl CommandDispatchService {
-    /// Bangun command index dari TopicIndex (filter set + control).
+    /// Build the command index from the TopicIndex (set and control entries only).
     pub fn new(
         base_topic: String,
         index: &TopicIndex,
@@ -88,18 +88,18 @@ impl CommandDispatchService {
         }
     }
 
-    /// Wildcard untuk subscribe semua command topic.
+    /// Wildcard that matches every command topic.
     pub fn subscribe_pattern(&self) -> String {
         format!("{}/cmd/#", self.base_topic)
     }
 
-    /// Apakah topic ini dimiliki commander (untuk routing di main loop).
+    /// Whether this service owns the topic (for routing in the main loop).
     pub fn owns_topic(&self, topic: &str) -> bool {
         topic.starts_with(&format!("{}/cmd/", self.base_topic))
     }
 
-    /// Process satu command. Spawn task supaya caller (MQTT loop) tidak block
-    /// menunggu Scylla read. Production path.
+    /// Process one command in a spawned task so the MQTT loop does not wait
+    /// on the Scylla read. Production path.
     pub fn dispatch(&self, topic: String, payload: Vec<u8>) {
         let sem = Arc::clone(&self.dispatch_sem);
         let Ok(permit) = sem.try_acquire_owned() else {
@@ -120,7 +120,7 @@ impl CommandDispatchService {
         });
     }
 
-    /// Test-friendly: bypass spawn, return Result agar bisa di-assert langsung.
+    /// For tests: runs inline and returns the Result so it can be asserted.
     #[cfg(test)]
     pub async fn dispatch_sync(&self, topic: &str, payload: &[u8]) -> Result<()> {
         self.process(topic, payload).await

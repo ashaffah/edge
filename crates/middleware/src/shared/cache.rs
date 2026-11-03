@@ -1,12 +1,12 @@
 //! Cache abstraction.
 //!
-//! Cache adalah **mirror, bukan source of truth**. Scylla tetap authoritative.
-//! Write-through: setiap state change ditulis ke Scylla AND cache.
-//! Read disediakan untuk fitur turunan (state_query HTTP API, dst).
+//! The cache is a mirror, not the source of truth: Scylla is authoritative.
+//! Write-through: every state change goes to Scylla and to the cache.
+//! The read methods are for later features that need fast reads.
 //!
-//! Implementasi production: `ValkeyCache` (wire-compatible dgn Redis & Valkey).
-//! Untuk dev/CI tanpa Valkey: set `CACHE_URL=""` → `NoOpCache` aktif (no-op semua).
-//! Untuk test feature: pakai `MockCache` di tests masing-masing.
+//! Production implementation: `ValkeyCache` (works with Redis and Valkey).
+//! For dev/CI without Valkey, set `CACHE_URL=""` to use `NoOpCache`.
+//! Feature tests use their own `MockCache`.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -50,13 +50,13 @@ pub struct ActuatorCurrent {
 // Trait
 // ---------------------------------------------------------------------------
 
-/// Cache repository — write-through mirror untuk current state.
+/// Cache repository: write-through mirror of the current state.
 ///
-/// `record_*` sync, fire-and-forget (spawn task untuk production impl).
-/// Caller tidak boleh block waiting for cache write — cache bukan critical path.
+/// `record_*` is sync and fire-and-forget (the production impl spawns a task).
+/// Callers must not wait on a cache write; the cache is not on the critical path.
 ///
-/// `read_*` async; pemakaian oleh fitur turunan (mis. state_query HTTP).
-/// Implementasi mengembalikan `Ok(None)` kalau key tidak ada (bukan error).
+/// `read_*` is async, for later features. Returns `Ok(None)` when the key
+/// does not exist (not an error).
 #[async_trait]
 pub trait CacheRepo: Send + Sync {
     fn record_telemetry_current(&self, row: &TelemetryRow);
@@ -81,12 +81,12 @@ pub trait CacheRepo: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// ValkeyCache — production impl (wire-compatible Redis & Valkey)
+// ValkeyCache: production impl (Redis and Valkey)
 // ---------------------------------------------------------------------------
 
-/// Batas maksimum concurrent cache write task yang boleh berjalan serentak.
-/// Kalau penuh → write baru di-drop (log warn). Match pattern telemetry channel
-/// drop: cache bukan critical path, availability lebih penting dari completeness.
+/// Maximum number of cache write tasks running at once. When full, new
+/// writes are dropped with a warning, the same policy as the telemetry
+/// channel: the cache is not on the critical path.
 const CACHE_WRITE_CONCURRENCY: usize = 64;
 
 pub struct ValkeyCache {
@@ -94,9 +94,9 @@ pub struct ValkeyCache {
     prefix: String,
     telemetry_ttl_secs: u64,
     state_ttl_secs: u64,
-    /// Semaphore untuk bound concurrent `spawn_set` tasks. Mencegah task
-    /// accumulation saat Valkey lambat/overloaded — terutama penting untuk
-    /// `record_telemetry_current` yang dipanggil di hot path (1 Hz × N params).
+    /// Bounds concurrent `spawn_set` tasks so they do not pile up while Valkey
+    /// is slow, mainly for `record_telemetry_current`, which runs on the hot
+    /// path (1 Hz times N params).
     write_sem: Arc<Semaphore>,
 }
 
@@ -125,10 +125,9 @@ impl ValkeyCache {
         format!("{}:{}:{}:{}", self.prefix, ns, machine, key)
     }
 
-    /// Spawn a fire-and-forget SETEX. Bounded oleh `CACHE_WRITE_CONCURRENCY`:
-    /// kalau semaphore penuh (Redis/Valkey lambat/overloaded), write baru di-drop
-    /// dengan warn — sama dengan policy drop di telemetry channel. Cache bukan
-    /// critical path; availability task loop lebih penting dari completeness.
+    /// Spawn a fire-and-forget SETEX, bounded by `CACHE_WRITE_CONCURRENCY`.
+    /// When the semaphore is full (Redis/Valkey slow), the write is dropped
+    /// with a warning, the same policy as the telemetry channel.
     fn spawn_set(&self, key: String, payload: String, ttl_secs: u64) {
         let sem = Arc::clone(&self.write_sem);
         let Ok(permit) = sem.try_acquire_owned() else {
@@ -137,7 +136,7 @@ impl ValkeyCache {
         };
         let mut conn = self.conn.clone();
         tokio::spawn(async move {
-            let _permit = permit; // drop saat task selesai → slot dibebaskan
+            let _permit = permit; // released when the task finishes
             let res: redis::RedisResult<()> = conn.set_ex(&key, &payload, ttl_secs).await;
             if let Err(e) = res {
                 warn!(%key, "cache write failed: {e:#}");
@@ -240,10 +239,10 @@ impl CacheRepo for ValkeyCache {
 }
 
 // ---------------------------------------------------------------------------
-// NoOpCache — fallback ketika CACHE_URL kosong (dev/CI tanpa Valkey)
+// NoOpCache: fallback when CACHE_URL is empty (dev/CI without Valkey)
 // ---------------------------------------------------------------------------
 
-/// Cache yang tidak melakukan apa-apa. Aktif kalau `CACHE_URL` di env kosong.
+/// Cache that does nothing. Used when `CACHE_URL` is empty.
 pub struct NoOpCache;
 
 #[async_trait]
@@ -279,10 +278,10 @@ impl CacheRepo for NoOpCache {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Buang password dari `redis://user:pass@host` untuk logging.
-/// Manual parse (hindari nambah crate `url` cuma untuk ini).
+/// Strip the password from `redis://user:pass@host` for logging.
+/// Parsed by hand to avoid adding the `url` crate for this alone.
 fn redact_url(url: &str) -> String {
-    // Cari skema://userinfo@host. userinfo bentuknya "user:pass" atau "user".
+    // Find scheme://userinfo@host, where userinfo is "user:pass" or "user".
     let Some(scheme_end) = url.find("://") else {
         return url.to_string();
     };

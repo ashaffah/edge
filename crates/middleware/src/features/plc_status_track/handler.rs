@@ -1,25 +1,24 @@
-//! Pure handler: terima plc/status message → parse JSON → record ke storage.
+//! Pure handler: parse a plc/status message and record it to storage.
 //!
-//! Mirror pola `heartbeat_track::handler`. Payload format identik dengan
-//! heartbeat (`{"status": "connected"|"disconnected"}`) — lihat
-//! `edge-client/src/telemetry.rs::PAYLOAD_PLC_CONNECTED`. Tabel berbeda
-//! supaya semantik (edge↔MQTT vs edge↔PLC) bisa dibedakan downstream.
+//! Same shape as `heartbeat_track::handler`, and the payload format is the
+//! same as heartbeat (`{"status": "connected"|"disconnected"}`, see
+//! `PAYLOAD_CONNECTED` in edge-client `plc_status.rs`). It goes to a separate
+//! table so edge to MQTT and edge to PLC status stay distinct downstream.
 
 use serde::Deserialize;
 use tracing::{debug, warn};
 
 use crate::shared::storage::{PlcStatusRow, StorageRepo};
 
-/// Payload PLC status dari edge-client. Field `status` saja yang dipakai —
-/// kalau edge tambah field lain (mis. `error_code`, `last_address`) di future,
-/// serde akan ignore by default sampai schema di-extend.
+/// PLC status payload from edge-client. Only `status` is used; serde ignores
+/// any other field the edge may add later.
 #[derive(Debug, Deserialize)]
 struct PlcStatusPayload {
     status: String,
 }
 
-/// Proses satu plc/status message. Caller (service) sudah validasi bahwa
-/// `machine` ada di daftar yang diizinkan, dan sudah ekstrak dari topic.
+/// Process one plc/status message. The caller (service) already extracted
+/// `machine` from the topic and checked that it is known.
 pub fn handle(storage: &dyn StorageRepo, machine: &str, payload: &str, ts_ms: i64) {
     let parsed: PlcStatusPayload = match serde_json::from_str(payload) {
         Ok(p) => p,
@@ -29,8 +28,8 @@ pub fn handle(storage: &dyn StorageRepo, machine: &str, payload: &str, ts_ms: i6
         }
     };
 
-    // Sanitasi: status harus salah satu nilai yang diakui. Yang tidak diakui
-    // di-warn tapi tetap drop supaya tidak corrupt data history.
+    // Only known status values are stored. Anything else is logged and
+    // dropped so it does not end up in the history.
     match parsed.status.as_str() {
         "connected" | "disconnected" => {}
         other => {

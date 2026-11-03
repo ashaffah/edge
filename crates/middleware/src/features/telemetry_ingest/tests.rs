@@ -1,6 +1,5 @@
-//! Unit tests untuk telemetry ingest. Pakai manual MockStorage + MockCache
-//! yang record method call ke Vec, di-protect Mutex supaya bisa di-baca dari
-//! test thread.
+//! Unit tests for telemetry ingest. Hand-written MockStorage and MockCache
+//! record method calls in a Vec behind a Mutex so the test thread can read them.
 
 use super::*;
 use anyhow::Result;
@@ -14,7 +13,7 @@ use crate::shared::storage::{
 use edge_shared::{MiddlewareMapping, TopicIndex};
 
 // ---------------------------------------------------------------------------
-// MockStorage: record semua write, return None untuk read.
+// MockStorage: records every write, returns None for reads.
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
@@ -78,7 +77,7 @@ impl MockStorage {
 }
 
 // ---------------------------------------------------------------------------
-// MockCache: record semua write, return None untuk read.
+// MockCache: records every write, returns None for reads.
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
@@ -171,7 +170,7 @@ fn float_monitoring_routes_to_telemetry() {
     assert_eq!(t[0].ts_ms, 1_700_000_000_000);
     assert_eq!(t[0].unit.as_deref(), Some("A"));
 
-    // Cache juga harus dapat write yang sama (write-through).
+    // The cache gets the same write (write-through).
     let c = cache.telemetry.lock().unwrap();
     assert_eq!(c.len(), 1);
     assert!((c[0].value - 12.5).abs() < 1e-9);
@@ -203,7 +202,7 @@ fn set_state_routes_to_setpoint_current() {
     assert_eq!(s[0].ts_ms, 7);
     assert!(
         storage.setpoint_history.lock().unwrap().is_empty(),
-        "readback tidak masuk history"
+        "readback does not go to history"
     );
 
     let cs = cache.setpoint.lock().unwrap();
@@ -228,8 +227,8 @@ fn control_state_routes_to_actuator_current() {
 
 #[test]
 fn command_topics_not_recorded_as_state() {
-    // Forward middleware sendiri atau publish langsung ke topic edge: bisa di-deny
-    // gate, jadi bukan state PLC.
+    // Forwarded by the middleware or published straight to the edge topic: the
+    // gate may deny it, so it is not PLC state.
     let (service, storage, cache) = fixture();
     service.handle_at("acme/site/area1/machine_a/control/lamp", "1", 0);
     service.handle_at("acme/site/area1/machine_a/set/temp/main", "80.0", 0);
@@ -244,12 +243,12 @@ fn command_topics_not_recorded_as_state() {
 fn unknown_topic_silently_skipped() {
     let (service, storage, cache) = fixture();
     service.handle_at("acme/site/unknown/foo/bar", "1.0", 0);
-    // State topic untuk param yang tidak ada di mapping juga tidak dikenal.
+    // A state topic for a param that is not in the mapping is unknown too.
     service.handle_at("acme/site/area1/machine_a/state/control/unknown", "true", 0);
 
     assert_eq!(storage.telemetry.lock().unwrap().len(), 0);
     assert!(storage.state_and_history_empty());
-    // Cache juga tidak boleh tertulis untuk topic tidak dikenal.
+    // Nothing is written to the cache for an unknown topic either.
     assert_eq!(cache.telemetry.lock().unwrap().len(), 0);
     assert_eq!(cache.setpoint.lock().unwrap().len(), 0);
     assert_eq!(cache.actuator.lock().unwrap().len(), 0);
@@ -268,7 +267,7 @@ fn invalid_payload_no_record() {
 #[test]
 fn control_state_with_non_boolean_skipped() {
     let (service, storage, cache) = fixture();
-    // "2" bukan boolean valid.
+    // "2" is not a valid boolean.
     service.handle_at("acme/site/area1/machine_a/state/control/lamp", "2", 0);
     assert!(storage.actuator_current.lock().unwrap().is_empty());
     assert_eq!(cache.actuator.lock().unwrap().len(), 0);

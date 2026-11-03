@@ -1,6 +1,5 @@
-//! Feature modules. Setiap feature self-contained: punya handler, DTO
-//! internal, dan tests sendiri. Bergantung pada `shared::` via trait,
-//! tidak pada implementasi konkret.
+//! Feature modules. Each feature has its own handler, internal DTOs and
+//! tests, and depends on `shared::` through traits, not concrete types.
 
 pub mod command_dispatch;
 pub mod heartbeat_track;

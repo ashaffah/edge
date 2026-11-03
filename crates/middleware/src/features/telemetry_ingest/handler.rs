@@ -1,6 +1,6 @@
-//! Pure handler: terima MQTT message → parse → record ke storage + cache.
+//! Pure handler: parse an MQTT message and record it to storage and cache.
 //!
-//! Tidak nyentuh MQTT, Scylla, atau Valkey langsung; semua via trait.
+//! No direct MQTT, Scylla or Valkey access, only traits.
 
 use std::collections::HashMap;
 
@@ -10,14 +10,12 @@ use crate::shared::cache::CacheRepo;
 use crate::shared::storage::{ActuatorRow, SetpointRow, StorageRepo, TelemetryRow};
 use edge_shared::{Category, DataType, TopicEntry, TopicIndex, TypedValue};
 
-/// Proses satu telemetry message. Caller bertanggung jawab menyediakan
-/// timestamp (biasanya `time::now_ms()` di production, atau nilai tetap
-/// di test).
+/// Process one telemetry message. The caller supplies the timestamp
+/// (`time::now_ms()` in production, a fixed value in tests).
 ///
-/// Write-through pattern: setiap row ditulis ke `storage` (authoritative,
-/// Scylla) DAN `cache` (Valkey/Redis mirror untuk fast read by future
-/// features). Cache failure tidak fatal — sudah dihandle di dalam impl
-/// `CacheRepo` (log warn, continue).
+/// Write-through: every row goes to `storage` (Scylla, authoritative) and to
+/// `cache` (Valkey/Redis mirror for fast reads). A cache failure is not fatal:
+/// the `CacheRepo` implementation logs a warning and continues.
 pub fn handle(
     index: &TopicIndex,
     state_index: &HashMap<String, TopicEntry>,
@@ -38,9 +36,9 @@ pub fn handle(
     };
 
     if !matches!(entry.category, Category::Monitoring) {
-        // Command yang di-forward middleware sendiri atau di-publish langsung ke
-        // topic edge. Belum tentu ditulis ke PLC (gate, Modbus error), jadi
-        // bukan state. State datang dari topic readback.
+        // A command forwarded by the middleware or published straight to the
+        // edge topic. It may never reach the PLC (gate, Modbus error), so it is
+        // not state. State comes from the readback topics.
         debug!(%topic, "command topic, not recorded as state");
         return;
     }
@@ -63,7 +61,7 @@ pub fn handle(
     storage.record_telemetry(row);
 }
 
-/// Readback state dari edge-client: satu-satunya sumber `*_current`.
+/// Readback state from edge-client, the only source of `*_current`.
 fn handle_state(
     entry: &TopicEntry,
     storage: &dyn StorageRepo,
@@ -92,7 +90,7 @@ fn handle_state(
             storage.record_setpoint_current(row);
         }
         Category::Control => {
-            // Readback control selalu boolean, apa pun `type` entry di mapping.
+            // Control readback is always boolean, whatever the entry's `type` in the mapping.
             let Some(TypedValue::Boolean(state)) = parse(DataType::Boolean, topic, payload) else {
                 return;
             };

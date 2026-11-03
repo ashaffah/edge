@@ -1,10 +1,9 @@
-//! Unit tests untuk plc_status track. Pakai manual MockStorage yang record
-//! plc_status call ke Vec di Mutex. Stub method lain ke no-op karena feature
-//! ini cuma pakai `record_plc_status`.
+//! Unit tests for plc_status track. A hand-written MockStorage records
+//! plc_status calls in a Vec behind a Mutex. Other methods are no-ops since
+//! this feature only uses `record_plc_status`.
 //!
-//! Sengaja mirror struktur `heartbeat_track::tests` supaya gampang
-//! cross-reference: kalau pola routing/parsing di heartbeat berubah, plc_status
-//! harus berubah sama.
+//! Same structure as `heartbeat_track::tests`: if routing or parsing changes
+//! there, it should change here too.
 
 use super::*;
 use anyhow::Result;
@@ -88,9 +87,9 @@ fn owns_topic_rejects_non_plc_status_suffix() {
     let (svc, _) = fixture();
     assert!(!svc.owns_topic("acme/site/area1/machine_a/heartbeat"));
     assert!(!svc.owns_topic("acme/site/area1/machine_a/resources"));
-    // Suffix mirip tapi tidak persis: `/plc/state` bukan `/plc/status`.
+    // Similar suffix: `/plc/state` is not `/plc/status`.
     assert!(!svc.owns_topic("acme/site/area1/machine_a/plc/state"));
-    // Prefix berbeda: bukan diakhiri dengan `/plc/status` setelah machine.
+    // Does not end with `/plc/status` after the machine.
     assert!(!svc.owns_topic("acme/site/area1/machine_a/current/motor"));
 }
 
@@ -180,13 +179,13 @@ fn handle_rejects_missing_status_field() {
 #[test]
 fn handle_silently_drops_foreign_topic() {
     let (svc, storage) = fixture();
-    // Bukan topic milik service: tidak match prefix
+    // Not this service's topic: prefix does not match
     svc.handle_at(
         "other/base/area1/machine_a/plc/status",
         r#"{"status":"connected"}"#,
         1,
     );
-    // Match prefix tapi machine tidak dikenal
+    // Prefix matches but the machine is unknown
     svc.handle_at(
         "acme/site/area2/chiller/plc/status",
         r#"{"status":"connected"}"#,

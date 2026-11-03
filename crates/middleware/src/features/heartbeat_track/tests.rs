@@ -1,6 +1,6 @@
-//! Unit tests untuk heartbeat track. Pakai manual MockStorage yang record
-//! heartbeat call ke Vec di Mutex. Stub method lain ke no-op karena feature
-//! ini cuma pakai `record_heartbeat`.
+//! Unit tests for heartbeat track. A hand-written MockStorage records heartbeat
+//! calls in a Vec behind a Mutex. Other methods are no-ops since this feature
+//! only uses `record_heartbeat`.
 
 use super::*;
 use anyhow::Result;
@@ -12,7 +12,7 @@ use crate::shared::storage::{
     ActuatorRow, HeartbeatRow, PlcStatusRow, ResourceRow, SetpointRow, StorageRepo, TelemetryRow,
 };
 
-/// No-op publisher — heartbeat tests fokus ke storage record, bukan publish.
+/// No-op publisher: these tests check what is recorded, not what is published.
 #[derive(Default)]
 struct NoopPublisher;
 
@@ -186,13 +186,13 @@ fn handle_rejects_missing_status_field() {
 #[test]
 fn handle_silently_drops_foreign_topic() {
     let (svc, storage) = fixture();
-    // Bukan topic milik service: tidak match prefix
+    // Not this service's topic: prefix does not match
     svc.handle_at(
         "other/base/area1/machine_a/heartbeat",
         r#"{"status":"connected"}"#,
         1,
     );
-    // Match prefix tapi machine tidak dikenal
+    // Prefix matches but the machine is unknown
     svc.handle_at(
         "acme/site/area2/machine_c/heartbeat",
         r#"{"status":"connected"}"#,

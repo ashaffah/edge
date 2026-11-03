@@ -1,5 +1,5 @@
-//! Unit tests untuk resource track. MockStorage record `record_resource`,
-//! method lain no-op (sama strategi seperti `heartbeat_track::tests`).
+//! Unit tests for resource track. MockStorage records `record_resource`, other
+//! methods are no-ops (same approach as `heartbeat_track::tests`).
 
 use super::*;
 use anyhow::Result;
@@ -114,8 +114,8 @@ fn handle_full_payload_records_row() {
 
 #[test]
 fn handle_ignores_extra_fields() {
-    // Field tambahan di payload (mis. published_ts_ms dari edge clock) di-ignore.
-    // Server pakai clock sendiri.
+    // Extra payload fields (e.g. published_ts_ms from the edge clock) are ignored.
+    // The middleware uses its own clock.
     let (svc, storage) = fixture();
     svc.handle_at(
         "acme/site/area1/machine_b/resources",
@@ -132,7 +132,7 @@ fn handle_ignores_extra_fields() {
 
 #[test]
 fn handle_accepts_empty_ip() {
-    // Network broken di edge → IP empty. Tetap di-record (design decision).
+    // Edge network down gives an empty IP. Still recorded.
     let (svc, storage) = fixture();
     svc.handle_at(
         "acme/site/area1/machine_a/resources",
@@ -146,7 +146,7 @@ fn handle_accepts_empty_ip() {
 
 #[test]
 fn handle_accepts_out_of_range_pct() {
-    // No range validation by design — dashboard yang detect anomaly.
+    // No range check: the dashboard flags anomalies.
     let (svc, storage) = fixture();
     svc.handle_at(
         "acme/site/area1/machine_a/resources",
@@ -197,7 +197,7 @@ fn handle_rejects_missing_field() {
 
 #[test]
 fn handle_rejects_wrong_type() {
-    // cpu_pct sebagai string → parse fail
+    // cpu_pct as a string fails to parse
     let (svc, storage) = fixture();
     svc.handle_at(
         "acme/site/area1/machine_a/resources",
@@ -209,8 +209,8 @@ fn handle_rejects_wrong_type() {
 
 #[test]
 fn handle_rejects_legacy_python_field_names() {
-    // Defense: payload pakai nama Python lama (memory_usage/cpu_usage/ip_address)
-    // sekarang harus REJECTED. Kalau ini suatu hari pass, ada regression ke compat mode.
+    // Payloads with the old Python field names (memory_usage/cpu_usage/ip_address)
+    // must be rejected. If this ever passes, a compat mode crept back in.
     let (svc, storage) = fixture();
     svc.handle_at(
         "acme/site/area1/machine_a/resources",

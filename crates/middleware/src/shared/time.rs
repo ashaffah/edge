@@ -1,11 +1,11 @@
-//! Time helpers untuk Scylla timestamp/date encoding.
+//! Time helpers for Scylla timestamp and date encoding.
 
 use scylla::value::CqlDate;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Convert ms-since-epoch → CqlDate.
-/// CqlDate internal: u32, days since -5877641-06-23 (= 2^31 days sebelum
-/// unix epoch). Jadi: days_since_unix + 2^31.
+/// Convert ms since the Unix epoch to a CqlDate.
+/// CqlDate is a u32 counting days since -5877641-06-23, which is 2^31 days
+/// before the Unix epoch, so the value is days_since_unix + 2^31.
 pub fn cql_date_from_ms(ts_ms: i64) -> CqlDate {
     const MS_PER_DAY: i64 = 86_400_000;
     const EPOCH_OFFSET: i64 = 1 << 31;

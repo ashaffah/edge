@@ -1,11 +1,11 @@
-//! Telemetry ingest feature: terima MQTT message dari PLC, parse, persist
-//! ke storage per kategori, dan write-through ke cache untuk current state mirror.
+//! Telemetry ingest feature: take PLC values from MQTT, parse them, persist
+//! them to storage by category and write through to the cache.
 //!
-//! - Monitoring: `telemetry`.
-//! - Readback `{base}/{machine}/state/{topic}` dari edge-client: `setpoint_current` /
-//!   `actuator_current`. Ini satu-satunya sumber `*_current`.
-//! - Topic `set/` / `control/` tanpa `state/` adalah command (forward middleware atau
-//!   publish langsung), bukan state PLC, jadi tidak dicatat.
+//! - Monitoring goes to `telemetry`.
+//! - Readback on `{base}/{machine}/state/{topic}` from edge-client goes to
+//!   `setpoint_current` / `actuator_current`. This is the only source of `*_current`.
+//! - `set/` and `control/` topics without `state/` are commands (forwarded by the
+//!   middleware or published directly), not PLC state, so they are not recorded.
 
 mod handler;
 
@@ -20,11 +20,11 @@ use crate::shared::storage::StorageRepo;
 use crate::shared::time::now_ms;
 use edge_shared::{Category, TopicEntry, TopicIndex, state_topic};
 
-/// Service handle untuk telemetry ingestion. Cheap to clone (cuma Arc).
+/// Service handle for telemetry ingest. Cheap to clone (only Arcs).
 #[derive(Clone)]
 pub struct TelemetryIngestService {
     index: Arc<TopicIndex>,
-    /// State topic readback ke entry `set` / `control` asalnya.
+    /// Maps a readback state topic to its `set` / `control` entry.
     state_index: Arc<HashMap<String, TopicEntry>>,
     storage: Arc<dyn StorageRepo>,
     cache: Arc<dyn CacheRepo>,
@@ -46,7 +46,7 @@ impl TelemetryIngestService {
         }
     }
 
-    /// Proses satu pesan masuk. Timestamp diambil dari clock saat ini.
+    /// Process one incoming message, timestamped with the current clock.
     pub fn handle(&self, topic: &str, payload: &str) {
         handler::handle(
             &self.index,
@@ -59,7 +59,7 @@ impl TelemetryIngestService {
         );
     }
 
-    /// Variant test-friendly: timestamp di-inject.
+    /// Same as `handle`, with an injected timestamp for tests.
     #[cfg(test)]
     pub fn handle_at(&self, topic: &str, payload: &str, ts_ms: i64) {
         handler::handle(

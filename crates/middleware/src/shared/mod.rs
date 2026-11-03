@@ -1,9 +1,9 @@
-//! Shared infrastructure middleware: settings, storage trait+impl, mqtt
-//! publisher trait+impl, cache trait+impl, time helpers. Tidak ada business
-//! logic di sini.
+//! Middleware infrastructure: settings, storage, MQTT publisher and cache
+//! (each a trait plus its implementation), and time helpers. No business
+//! logic here.
 //!
-//! Catatan: type `Mapping`/`TopicIndex`/`DataType` dipindah ke crate
-//! `iot-middleware-shared` (workspace-level) karena shared dengan `edge-client`.
+//! The mapping types (`MiddlewareMapping`, `TopicIndex`, `DataType`) live in
+//! the `edge-shared` crate because edge-client uses them too.
 
 pub mod cache;
 pub mod mqtt_client;

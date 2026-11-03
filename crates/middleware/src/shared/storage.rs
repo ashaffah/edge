@@ -1,7 +1,7 @@
 //! Storage abstraction.
 //!
-//! Feature pakai `dyn StorageRepo`. Production injects `ScyllaStorage`,
-//! test injects `MockStorage` (di feature tests).
+//! Features use `dyn StorageRepo`. Production injects `ScyllaStorage`,
+//! feature tests inject `MockStorage`.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -54,8 +54,8 @@ pub struct ActuatorRow {
 #[derive(Debug, Clone)]
 pub struct HeartbeatRow {
     pub machine: String,
-    /// Status string, biasanya `"connected"` atau `"disconnected"` (LWT).
-    /// Disimpan as-is supaya extensible kalau edge-client tambah state baru.
+    /// Usually `"connected"` or `"disconnected"` (LWT). Stored as-is so a new
+    /// edge-client state needs no schema change.
     pub status: String,
     pub ts_ms: i64,
 }
@@ -63,9 +63,9 @@ pub struct HeartbeatRow {
 #[derive(Debug, Clone)]
 pub struct PlcStatusRow {
     pub machine: String,
-    /// Status koneksi Modbus edge↔PLC. Biasanya `"connected"` atau
-    /// `"disconnected"`. Disimpan as-is supaya extensible kalau edge-client
-    /// tambah state baru (mis. `"degraded"`).
+    /// Edge to PLC Modbus link status, usually `"connected"` or
+    /// `"disconnected"`. Stored as-is so a new edge-client state needs no
+    /// schema change.
     pub status: String,
     pub ts_ms: i64,
 }
@@ -74,60 +74,59 @@ pub struct PlcStatusRow {
 pub struct ResourceRow {
     pub machine: String,
     pub ts_ms: i64,
-    /// Persen utilisasi memory edge (0-100, tapi tidak di-validate range).
+    /// Edge memory use in percent (0-100, not range-checked).
     pub memory_pct: f64,
-    /// Persen utilisasi CPU edge.
+    /// Edge CPU use in percent.
     pub cpu_pct: f64,
-    /// Local IP address edge node. Bisa kosong kalau network broken saat publish.
+    /// Local IP of the edge node. Empty if the network was down when it published.
     pub ip: String,
 }
 
 // ---------------------------------------------------------------------------
-// Trait — interface yang dipakai feature
+// Trait used by the features
 // ---------------------------------------------------------------------------
 
-/// Abstraksi persistence. Implementasi production = ScyllaStorage.
-/// Test bisa pakai mock.
+/// Persistence interface. Production uses ScyllaStorage, tests use a mock.
 #[async_trait]
 pub trait StorageRepo: Send + Sync {
-    /// Catat telemetry. Implementasi production non-blocking (buffered).
+    /// Record telemetry. The production impl is non-blocking (buffered).
     fn record_telemetry(&self, row: TelemetryRow);
 
-    /// Catat command setpoint yang di-forward ke edge (`setpoint_history`).
+    /// Record a setpoint command forwarded to the edge (`setpoint_history`).
     fn record_setpoint_history(&self, row: SetpointRow);
 
-    /// Catat nilai setpoint hasil readback PLC (`setpoint_current`).
+    /// Record a setpoint value read back from the PLC (`setpoint_current`).
     fn record_setpoint_current(&self, row: SetpointRow);
 
-    /// Catat command actuator yang di-forward ke edge (`actuator_history`).
+    /// Record an actuator command forwarded to the edge (`actuator_history`).
     fn record_actuator_history(&self, row: ActuatorRow);
 
-    /// Catat state actuator hasil readback PLC (`actuator_current`).
+    /// Record an actuator state read back from the PLC (`actuator_current`).
     fn record_actuator_current(&self, row: ActuatorRow);
 
-    /// Catat heartbeat (dual-write history + current). Async fire-and-forget
-    /// seperti setpoint/actuator: caller tidak block menunggu Scylla.
+    /// Record a heartbeat (writes history and current). Fire-and-forget like
+    /// setpoint/actuator: the caller does not wait on Scylla.
     fn record_heartbeat(&self, row: HeartbeatRow);
 
-    /// Catat status koneksi Modbus PLC dari edge-client (dual-write history +
-    /// current). Async fire-and-forget. Beda semantik dari heartbeat:
-    /// heartbeat = edge↔MQTT, plc_status = edge↔Modbus PLC.
+    /// Record the PLC Modbus link status from edge-client (writes history and
+    /// current). Fire-and-forget. Heartbeat covers edge to MQTT, this covers
+    /// edge to PLC.
     fn record_plc_status(&self, row: PlcStatusRow);
 
-    /// Catat resource snapshot (CPU/mem/IP) edge node. Dual-write history +
-    /// current. Async fire-and-forget.
+    /// Record a CPU/memory/IP snapshot of an edge node (writes history and
+    /// current). Fire-and-forget.
     fn record_resource(&self, row: ResourceRow);
 
-    /// Baca setpoint terkini per (machine, key) beserta `ts_ms`-nya.
-    /// None = belum pernah ditulis.
+    /// Read the current setpoint for (machine, key) with its `ts_ms`.
+    /// None if it was never written.
     async fn read_setpoint_current(&self, machine: &str, key: &str) -> Result<Option<(f64, i64)>>;
 
-    /// Baca actuator state terkini beserta `ts_ms`-nya. None = belum pernah ditulis.
+    /// Read the current actuator state with its `ts_ms`. None if it was never written.
     async fn read_actuator_current(&self, machine: &str, key: &str) -> Result<Option<(bool, i64)>>;
 }
 
 // ---------------------------------------------------------------------------
-// ScyllaStorage — production impl
+// ScyllaStorage: production impl
 // ---------------------------------------------------------------------------
 
 /// Translates any peer address gossiped by ScyllaDB to the configured seed
@@ -273,24 +272,24 @@ fn parse_consistency(s: &str) -> Result<Consistency> {
         "EachQuorum" => Ok(Consistency::EachQuorum),
         "LocalOne" => Ok(Consistency::LocalOne),
         other => anyhow::bail!(
-            "SCYLLA_CONSISTENCY '{other}' tidak dikenal. \
-             Pilihan: Any|One|Two|Three|Quorum|All|LocalQuorum|EachQuorum|LocalOne"
+            "unknown SCYLLA_CONSISTENCY '{other}'. \
+             Valid: Any|One|Two|Three|Quorum|All|LocalQuorum|EachQuorum|LocalOne"
         ),
     }
 }
 
-/// Batas concurrent spawn untuk non-telemetry writes (setpoint/actuator/heartbeat/resource).
-/// Kalau penuh → write di-drop dengan warn. Sama dengan policy drop di cache.rs —
-/// Scylla non-telemetry rows bukan hot path; availability lebih penting dari completeness
-/// saat Scylla overloaded.
+/// Maximum concurrent tasks for non-telemetry writes (setpoint, actuator,
+/// heartbeat, resource). When full, the write is dropped with a warning, the
+/// same policy as cache.rs: staying available matters more than completeness
+/// while Scylla is overloaded.
 const STORAGE_WRITE_CONCURRENCY: usize = 32;
 
 pub struct ScyllaStorage {
     session: Arc<Session>,
     prepared: Arc<Prepared>,
     telemetry_tx: mpsc::Sender<TelemetryRow>,
-    /// Semaphore untuk bound concurrent non-telemetry write tasks. Mencegah
-    /// task accumulation saat Scylla lambat/overloaded.
+    /// Bounds concurrent non-telemetry write tasks so they do not pile up
+    /// while Scylla is slow.
     write_sem: Arc<Semaphore>,
 }
 
@@ -314,7 +313,7 @@ impl ScyllaStorage {
             builder = builder.address_translator(Arc::new(FixedAddressTranslator { seed }));
         }
 
-        // Default consistency LocalQuorum requires ≥2 replicas. For a single-node
+        // Default consistency LocalQuorum requires at least 2 replicas. For a single-node
         // setup (dev/Docker) use LocalOne so writes/reads succeed with 1 node alive.
         let consistency = parse_consistency(&settings.consistency)?;
         let profile = ExecutionProfile::builder().consistency(consistency).build();
@@ -351,8 +350,8 @@ impl ScyllaStorage {
         })
     }
 
-    /// Fire-and-forget write bounded oleh semaphore. Kalau semaphore penuh
-    /// (Scylla lambat/overloaded) → warn + drop, tidak block caller.
+    /// Fire-and-forget write bounded by the semaphore. When it is full (Scylla
+    /// slow), the write is dropped with a warning instead of blocking the caller.
     fn spawn_write(
         &self,
         label: &'static str,
@@ -576,7 +575,7 @@ async fn flush_telemetry(
 }
 
 // ---------------------------------------------------------------------------
-// Insert primitives (low-level, dipakai worker dan record_* methods)
+// Insert primitives (used by the worker and the record_* methods)
 // ---------------------------------------------------------------------------
 
 async fn insert_telemetry(
@@ -595,7 +594,7 @@ async fn insert_telemetry(
     Ok(())
 }
 
-/// `stmt` = `insert_setpoint_history` atau `insert_setpoint_current` (kolom sama).
+/// `stmt` is `insert_setpoint_history` or `insert_setpoint_current` (same columns).
 async fn insert_setpoint(
     session: &Session,
     stmt: &PreparedStatement,
@@ -611,7 +610,7 @@ async fn insert_setpoint(
     Ok(())
 }
 
-/// `stmt` = `insert_actuator_history` atau `insert_actuator_current` (kolom sama).
+/// `stmt` is `insert_actuator_history` or `insert_actuator_current` (same columns).
 async fn insert_actuator(
     session: &Session,
     stmt: &PreparedStatement,
