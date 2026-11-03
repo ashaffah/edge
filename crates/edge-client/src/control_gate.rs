@@ -79,7 +79,7 @@ impl ControlGate {
         if conn.is_some() {
             info!(
                 hash_key = %hash_key,
-                "control gate active — HGETALL hash → granted iff global=1 AND {{machine}}=1"
+                "control gate active: HGETALL hash, granted only if global=1 and {{machine}}=1"
             );
         }
         Self { conn, hash_key }

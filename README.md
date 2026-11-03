@@ -254,7 +254,7 @@ Examples:
 // FC3 monitoring 32-bit integer (DINT on the PLC, e.g. a run time counter)
 { "kind": "read_holding_registers", "address": 36, "byte_order": "big_little", "format": "u32" }
 
-// FC4 with a scale multiplier (e.g. raw 250 → 25.0)
+// FC4 with a scale multiplier (e.g. raw 250 becomes 25.0)
 { "kind": "read_input_registers", "address": 1000, "scale": 0.1 }
 
 // FC5 control coil
@@ -307,7 +307,7 @@ using named capture groups. Each group name must match a `monitoring` `key`.
 ```jsonc
 "parser": {
   "regex": "[A-Za-z-]*(?P<weight>[-+]?[0-9]+\\.[0-9]+)(?P<unit>[A-Za-z]*)",
-  "byte_map": [ { "from": 176, "to": 48 } /* 0xB0→'0' … 0xB9→'9' */ ],
+  "byte_map": [ { "from": 176, "to": 48 } /* 0xB0..0xB9 map to '0'..'9' */ ],
   "raw_topic": "raw",          // optional: also publish all groups as one JSON object
   "stable": { "group": "st", "equals": "ST" }, // optional: publish only settled readings
   "read_timeout_ms": 5000       // optional: reopen the port if silent this long

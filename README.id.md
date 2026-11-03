@@ -255,7 +255,7 @@ Contoh:
 // FC3 monitoring integer 32-bit (DINT di PLC, mis. counter run time)
 { "kind": "read_holding_registers", "address": 36, "byte_order": "big_little", "format": "u32" }
 
-// FC4 dengan multiplier scale (mis. raw 250 → 25.0)
+// FC4 dengan multiplier scale (mis. raw 250 jadi 25.0)
 { "kind": "read_input_registers", "address": 1000, "scale": 0.1 }
 
 // FC5 control coil
@@ -309,7 +309,7 @@ memakai named capture group. Tiap nama group harus cocok dengan `key`
 ```jsonc
 "parser": {
   "regex": "[A-Za-z-]*(?P<weight>[-+]?[0-9]+\\.[0-9]+)(?P<unit>[A-Za-z]*)",
-  "byte_map": [ { "from": 176, "to": 48 } /* 0xB0→'0' … 0xB9→'9' */ ],
+  "byte_map": [ { "from": 176, "to": 48 } /* 0xB0..0xB9 jadi '0'..'9' */ ],
   "raw_topic": "raw",          // opsional: publish juga semua group sebagai 1 objek JSON
   "stable": { "group": "st", "equals": "ST" }, // opsional: publish hanya pembacaan stabil
   "read_timeout_ms": 5000       // opsional: reopen port jika sunyi selama ini
