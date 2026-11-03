@@ -1,0 +1,19 @@
+{
+  "location": "scale_area",
+  "name": "scale_gsc",
+  "monitoring": [
+    {
+      "key": "weight",
+      "label": "GSC Weight",
+      "topic": "weight/raw",
+      "type": "float",
+      "unit": "kg"
+    },
+    {
+      "key": "unit",
+      "label": "GSC Unit",
+      "topic": "unit/raw",
+      "type": "string"
+    }
+  ]
+}

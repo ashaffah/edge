@@ -1,0 +1,27 @@
+[package]
+name = "iot-middleware"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "MQTT to ScyllaDB bridge: stores edge telemetry and forwards operator commands to edge-client."
+
+[dependencies]
+# Shared via workspace
+anyhow.workspace = true
+async-trait.workspace = true
+dotenvy.workspace = true
+edge-shared.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Middleware-specific (not used by edge-client)
+bigdecimal = "0.4"
+env_logger = "0.11"
+num-bigint = "0.4"
+rumqttc = { version = "0.25", features = ["websocket", "url"] }
+redis = { version = "1.2", features = ["tokio-comp", "connection-manager"] }
+scylla = "1.6"
+uuid = "1.23"

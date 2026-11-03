@@ -62,6 +62,6 @@ pub mod readback;
 pub mod resource;
 pub mod scale;
 pub mod settings;
-pub mod shared;
+pub use edge_shared as shared;
 pub mod telemetry;
 pub mod weigher;

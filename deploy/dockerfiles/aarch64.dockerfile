@@ -18,5 +18,7 @@ ENV CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-RUN cargo build --release --target aarch64-unknown-linux-gnu
+COPY crates ./crates
+# Space-separated cargo package flags, set by build.sh (e.g. "-p edge-client").
+ARG PACKAGES="--workspace"
+RUN cargo build --release --target aarch64-unknown-linux-gnu $PACKAGES

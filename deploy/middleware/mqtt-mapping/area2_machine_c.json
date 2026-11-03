@@ -1,0 +1,43 @@
+{
+  "location": "area2",
+  "name": "machine_c",
+  "monitoring": [
+    {
+      "key": "temp_tank",
+      "label": "Tank Temperature",
+      "topic": "temp/tank",
+      "type": "float",
+      "unit": "C"
+    },
+    {
+      "key": "current_motor",
+      "label": "Motor Current",
+      "topic": "current/motor",
+      "type": "float",
+      "unit": "A"
+    }
+  ],
+  "set": [
+    {
+      "key": "set_temp_tank",
+      "label": "Tank Temp Setpoint",
+      "topic": "set/temp/tank",
+      "type": "float",
+      "unit": "C"
+    }
+  ],
+  "control": [
+    {
+      "key": "control_motor",
+      "label": "Motor On/Off",
+      "topic": "control/motor",
+      "type": "boolean"
+    },
+    {
+      "key": "control_valve_up",
+      "label": "Valve Open",
+      "topic": "control/valve/up",
+      "type": "boolean"
+    }
+  ]
+}

@@ -9,6 +9,11 @@ tidak perlu build ulang.
 Agent ini berjalan di board Linux ARM/x86 kecil (Raspberry Pi dan sejenisnya)
 sebagai service systemd yang hidup terus-menerus.
 
+Repo ini juga berisi [`iot-middleware`](crates/middleware/README.md), service di
+sisi server yang menyimpan data dari agent ke ScyllaDB serta memvalidasi,
+men-dedup dan mengirim ack untuk command operator sebelum sampai ke agent.
+Agent tetap bisa jalan tanpa middleware.
+
 > 🇬🇧 English: [README.md](README.md)
 
 ## Daftar Isi
@@ -35,14 +40,17 @@ sebagai service systemd yang hidup terus-menerus.
 
 ## Struktur
 
-Satu package `edge-client`:
+Cargo workspace dengan tiga crate:
 
-- [`src/`](src/): agent-nya. Polling Modbus dan baca weigher, publish MQTT,
-  control gate, heartbeat dan laporan resource.
-- [`src/shared/`](src/shared/): domain type mapping dan Modbus (skema JSON
-  mapping, semantik register).
-- [`src/scale.rs`](src/scale.rs): subcommand `edge-client scale`, untuk
-  menampilkan output serial timbangan mentah.
+- [`crates/edge-client/`](crates/edge-client/): agent-nya. Polling Modbus dan
+  baca weigher, publish MQTT, control gate, heartbeat dan laporan resource.
+  [`src/scale.rs`](crates/edge-client/src/scale.rs) adalah subcommand
+  `edge-client scale`, untuk menampilkan output serial timbangan mentah.
+- [`crates/shared/`](crates/shared/) (`edge-shared`): domain type mapping dan
+  Modbus (skema JSON mapping, semantik register), dipakai kedua binary.
+- [`crates/middleware/`](crates/middleware/) (`iot-middleware`): bridge ke
+  ScyllaDB di sisi server. Lihat [README](crates/middleware/README.md)-nya
+  (bahasa Inggris).
 
 Satu instance `edge-client` menjalankan satu mesin. Mesin itu bisa punya PLC
 utama plus beberapa slave Modbus dan weigher di board yang sama. Agent tidak
@@ -58,7 +66,7 @@ satu port serial fisik dibuka tepat sekali.
 
 ```bash
 # 1. Build
-cargo build --release
+cargo build --release -p edge-client
 
 # 2. Konfigurasi
 cp deploy/edge-client/.env.example-edge-client .env       # kredensial broker
@@ -247,7 +255,7 @@ Contoh:
 // FC3 monitoring integer 32-bit (DINT di PLC, mis. counter run time)
 { "kind": "read_holding_registers", "address": 36, "byte_order": "big_little", "format": "u32" }
 
-// FC4 dengan multiplier scale (mis. raw 250 → 25.0)
+// FC4 dengan multiplier scale (mis. raw 250 jadi 25.0)
 { "kind": "read_input_registers", "address": 1000, "scale": 0.1 }
 
 // FC5 control coil
@@ -301,7 +309,7 @@ memakai named capture group. Tiap nama group harus cocok dengan `key`
 ```jsonc
 "parser": {
   "regex": "[A-Za-z-]*(?P<weight>[-+]?[0-9]+\\.[0-9]+)(?P<unit>[A-Za-z]*)",
-  "byte_map": [ { "from": 176, "to": 48 } /* 0xB0→'0' … 0xB9→'9' */ ],
+  "byte_map": [ { "from": 176, "to": 48 } /* 0xB0..0xB9 jadi '0'..'9' */ ],
   "raw_topic": "raw",          // opsional: publish juga semua group sebagai 1 objek JSON
   "stable": { "group": "st", "equals": "ST" }, // opsional: publish hanya pembacaan stabil
   "read_timeout_ms": 5000       // opsional: reopen port jika sunyi selama ini
@@ -500,10 +508,11 @@ topic heartbeat mesin primer kalau agent mati atau network putus. Setelah broker
 reconnect, agent otomatis subscribe ulang (rumqttc pakai clean session).
 
 Agent tidak mengecek siapa yang publish ke `control/`, `set/` atau `cmd/`, dan
-tidak punya dedup, ack atau audit log. Kalau butuh itu, pasang service di depan
-agent yang menerima command di topic-nya sendiri lalu meneruskannya, dan pakai
-ACL broker supaya hanya service itu yang boleh publish ke topic `control/#`,
-`set/#` dan `cmd/#` milik agent.
+tidak punya dedup, ack atau audit log. [`iot-middleware`](crates/middleware/README.md)
+menambahkan itu untuk `set` dan `control`: operator publish ke
+`{base_topic}/cmd/...` lalu middleware meneruskannya ke agent. Pakai ACL broker
+supaya hanya middleware yang boleh publish ke topic `control/#` dan `set/#`
+milik agent.
 
 ## Control gate
 
@@ -587,8 +596,9 @@ yang bisa diperbaiki dengan `byte_map` di mapping.
 
 ## Cross-compilation
 
-`build.sh` mem-build `edge-client` untuk suatu target di dalam container dan
-menaruh binary-nya ke `bin/`:
+`build.sh` mem-build binary untuk suatu target di dalam container dan menaruhnya
+ke `bin/`. Tanpa argumen crate, `edge-client` dan `iot-middleware` dua-duanya
+di-build; beri nama crate untuk mem-build satu saja:
 
 ```bash
 bash build.sh armv7-musl        # Raspberry Pi OS 32-bit, static (direkomendasikan)
@@ -600,7 +610,14 @@ bash build.sh win-x86_64-gnu    # Windows x86_64 (mingw-w64)
 bash build.sh win-x86_64-msvc   # Windows x86_64 (MSVC ABI via cargo-xwin)
 ```
 
-Jalankan `bash build.sh` tanpa argumen untuk melihat semua target.
+```bash
+bash build.sh armv7-musl edge-client
+bash build.sh x86_64-musl iot-middleware
+```
+
+Jalankan `bash build.sh` tanpa argumen untuk melihat semua target. `make build`
+mem-build `edge-client` untuk aarch64, armv7-musl, x86_64-musl dan
+win-x86_64-msvc, dan `iot-middleware` untuk x86_64-musl.
 
 ## Lisensi
 

@@ -18,5 +18,7 @@ ENV CC_x86_64_unknown_linux_musl=musl-gcc
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-RUN cargo build --release --target x86_64-unknown-linux-musl
+COPY crates ./crates
+# Space-separated cargo package flags, set by build.sh (e.g. "-p edge-client").
+ARG PACKAGES="--workspace"
+RUN cargo build --release --target x86_64-unknown-linux-musl $PACKAGES

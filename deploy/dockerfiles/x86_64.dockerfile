@@ -12,5 +12,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-RUN cargo build --release --target x86_64-unknown-linux-gnu
+COPY crates ./crates
+# Space-separated cargo package flags, set by build.sh (e.g. "-p edge-client").
+ARG PACKAGES="--workspace"
+RUN cargo build --release --target x86_64-unknown-linux-gnu $PACKAGES

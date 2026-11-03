@@ -179,7 +179,7 @@ fn select_port() -> Option<String> {
         // Enter with no input: use the first port as the default
         if trimmed.is_empty() {
             let port = &ports[0];
-            println!("→ {}", port.port_name);
+            println!("Selected: {}", port.port_name);
             return Some(port.port_name.clone());
         }
 
@@ -187,7 +187,7 @@ fn select_port() -> Option<String> {
             && n >= 1
             && n <= ports.len()
         {
-            println!("→ {}", ports[n - 1].port_name);
+            println!("Selected: {}", ports[n - 1].port_name);
             return Some(ports[n - 1].port_name.clone());
         }
 
