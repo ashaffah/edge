@@ -1,0 +1,9 @@
+{
+  "_notes": [
+    "Middleware mapping: this file holds base_topic, every other *.json file in this directory holds one machine.",
+    "No modbus or connection fields: the middleware does not talk to a PLC.",
+    "Topics, labels and types must match the edge-client mapping of the same machine (example-mapping.json at the repo root)."
+  ],
+  "base_topic": "acme/site",
+  "poll_interval_ms": 1000
+}

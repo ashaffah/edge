@@ -1,0 +1,30 @@
+{
+  "location": "area2",
+  "name": "chiller",
+  "monitoring": [
+    {
+      "key": "temp_out_chiller",
+      "label": "Chiller Outlet Temperature",
+      "topic": "temp/out",
+      "type": "integer",
+      "unit": "C"
+    }
+  ],
+  "set": [
+    {
+      "key": "set_temp_chiller",
+      "label": "Chiller Temp Setpoint",
+      "topic": "set/temp",
+      "type": "float",
+      "unit": "C"
+    }
+  ],
+  "control": [
+    {
+      "key": "control_chiller_on",
+      "label": "Chiller On/Off",
+      "topic": "control/on",
+      "type": "boolean"
+    }
+  ]
+}
