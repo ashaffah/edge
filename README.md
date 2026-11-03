@@ -9,6 +9,11 @@ does not need a rebuild.
 It runs on small ARM/x86 Linux boards (Raspberry Pi and similar) as a
 long-lived systemd service.
 
+The repo also holds [`iot-middleware`](crates/middleware/README.md), a
+server-side service that stores what the agents publish in ScyllaDB and
+validates, dedups and acks operator commands before they reach an agent. The
+agent works without it.
+
 > 🇮🇩 Indonesia: [README.id.md](README.id.md)
 
 ## Contents
@@ -35,14 +40,16 @@ long-lived systemd service.
 
 ## Layout
 
-Single package `edge-client`:
+A Cargo workspace with three crates:
 
-- [`src/`](src/): the agent. Modbus polling and weigher reading, MQTT publishing,
-  control gate, heartbeat and resource reporting.
-- [`src/shared/`](src/shared/): mapping and Modbus domain types (JSON mapping
-  schema, register semantics).
-- [`src/scale.rs`](src/scale.rs): the `edge-client scale` subcommand, which
-  prints raw scale serial output.
+- [`crates/edge-client/`](crates/edge-client/): the agent. Modbus polling and
+  weigher reading, MQTT publishing, control gate, heartbeat and resource
+  reporting. [`src/scale.rs`](crates/edge-client/src/scale.rs) is the
+  `edge-client scale` subcommand, which prints raw scale serial output.
+- [`crates/shared/`](crates/shared/) (`edge-shared`): mapping and Modbus domain
+  types (JSON mapping schema, register semantics), used by both binaries.
+- [`crates/middleware/`](crates/middleware/) (`iot-middleware`): the server-side
+  bridge to ScyllaDB. See its [README](crates/middleware/README.md).
 
 One `edge-client` instance runs one machine. That machine can have a primary PLC
 plus additional Modbus slaves and weighers on the same board. The agent stores
@@ -57,7 +64,7 @@ a per-port actor task so a single physical serial port is opened exactly once.
 
 ```bash
 # 1. Build
-cargo build --release
+cargo build --release -p edge-client
 
 # 2. Configure
 cp deploy/edge-client/.env.example-edge-client .env       # broker credentials
@@ -502,10 +509,10 @@ After a broker reconnect the agent re-subscribes automatically (rumqttc runs a
 clean session).
 
 The agent does not check who published to `control/`, `set/` or `cmd/`, and it
-has no dedup, ack or audit log. If you need those, put a service in front of
-the agent that receives commands on its own topics and forwards them, and use
-broker ACLs so that only this service can publish to the agent's `control/#`,
-`set/#` and `cmd/#` topics.
+has no dedup, ack or audit log. [`iot-middleware`](crates/middleware/README.md)
+adds those for `set` and `control`: operators publish to `{base_topic}/cmd/...`
+and the middleware forwards to the agent. Use broker ACLs so that only the
+middleware can publish to the agent's `control/#` and `set/#` topics.
 
 ## Control gate
 
@@ -590,8 +597,9 @@ with a `byte_map` in the mapping.
 
 ## Cross-compilation
 
-`build.sh` builds `edge-client` for a target inside a container and drops the
-binary into `bin/`:
+`build.sh` builds the binaries for a target inside a container and drops them
+into `bin/`. With no crate argument it builds both `edge-client` and
+`iot-middleware`; pass a crate name to build only that one:
 
 ```bash
 bash build.sh armv7-musl        # Raspberry Pi OS 32-bit, static (recommended)
@@ -603,7 +611,14 @@ bash build.sh win-x86_64-gnu    # Windows x86_64 (mingw-w64)
 bash build.sh win-x86_64-msvc   # Windows x86_64 (MSVC ABI via cargo-xwin)
 ```
 
-Run `bash build.sh` with no arguments to list all targets.
+```bash
+bash build.sh armv7-musl edge-client
+bash build.sh x86_64-musl iot-middleware
+```
+
+Run `bash build.sh` with no arguments to list all targets. `make build` builds
+`edge-client` for aarch64, armv7-musl, x86_64-musl and win-x86_64-msvc, and
+`iot-middleware` for x86_64-musl.
 
 ## License
 
