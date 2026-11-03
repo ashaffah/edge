@@ -1,0 +1,52 @@
+name: cassandra
+services:
+  scylla:
+    image: scylladb/scylla:latest
+    container_name: scylla
+    command: --smp 2 --memory 4G --overprovisioned 1
+      --authenticator PasswordAuthenticator
+      --authorizer CassandraAuthorizer
+      --listen-address 0.0.0.0
+      --rpc-address 0.0.0.0
+      --broadcast-rpc-address ${SCYLLA_BROADCAST_ADDRESS:-127.0.0.1}
+    ports:
+      - "${SCYLLA_PORT:-9042}:9042"
+      - "19042:19042"
+      - "9180:9180"
+    volumes:
+      - scylla_data:/var/lib/scylla
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'cqlsh -u cassandra -p cassandra -e "SELECT cluster_name FROM system.local;" || exit 1',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    restart: always
+  scylla-init:
+    image: scylladb/scylla:latest
+    container_name: scylla-init
+    depends_on:
+      scylla:
+        condition: service_healthy
+    environment:
+      SCYLLA_USER: ${SCYLLA_USER:?set SCYLLA_USER in .env}
+      SCYLLA_PASSWORD: ${SCYLLA_PASSWORD:?set SCYLLA_PASSWORD in .env}
+    volumes:
+      # Schema source of truth. Creates keyspace `iot_middleware` and every
+      # table (idempotent: IF NOT EXISTS). NetworkTopologyStrategy RF=1.
+      - ./init.cql:/init.cql:ro
+    entrypoint: >
+      /bin/sh -c "
+        sleep 60;
+        until cqlsh -u cassandra -p cassandra scylla -e 'DESCRIBE CLUSTER;'; do sleep 5; done;
+        cqlsh -u cassandra -p cassandra scylla -e \"CREATE ROLE IF NOT EXISTS ${SCYLLA_USER} WITH PASSWORD = '${SCYLLA_PASSWORD}' AND LOGIN = true AND SUPERUSER = true;\";
+        cqlsh -u cassandra -p cassandra scylla -f /init.cql;
+        echo '=== Scylla initialized: role ${SCYLLA_USER} + schema from init.cql ===';
+      "
+    restart: "no"
+volumes:
+  scylla_data:

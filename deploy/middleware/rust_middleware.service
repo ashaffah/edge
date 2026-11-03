@@ -1,0 +1,18 @@
+[Unit]
+Description=Rust Middleware Application
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+EnvironmentFile=/home/iotmiddleware/rust-middleware/.env
+WorkingDirectory=/home/iotmiddleware/rust-middleware
+ExecStart=/home/iotmiddleware/rust-middleware/iot-middleware-x86_64-musl
+Restart=always
+RestartSec=5
+User=iotmiddleware
+Group=iotmiddleware
+
+[Install]
+WantedBy=multi-user.target
