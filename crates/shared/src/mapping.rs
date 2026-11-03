@@ -9,6 +9,42 @@ use std::collections::HashMap;
 
 use super::modbus::ByteOrder;
 
+// ---------------------------------------------------------------------------
+// Middleware mapping
+// ---------------------------------------------------------------------------
+
+/// Mapping for iot-middleware: every machine it tracks.
+///
+/// Format: `{ base_topic, poll_interval_ms, devices: [...] }`. The middleware
+/// loader can also assemble it from a directory (one file per device).
+///
+/// Modbus bindings are accepted but not used: the middleware never talks to a
+/// PLC. The edge-client mapping of each machine is the source of truth for
+/// Modbus.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MiddlewareMapping {
+    /// Prefix for every topic the middleware subscribes to and publishes.
+    pub base_topic: String,
+    /// Informational. The middleware does not poll.
+    #[serde(default)]
+    pub poll_interval_ms: Option<u64>,
+    pub devices: Vec<MwDevice>,
+}
+
+/// One machine in a middleware mapping. `location` and `name` form the topic
+/// prefix `{base}/{location}/{name}/...`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MwDevice {
+    pub location: String,
+    pub name: String,
+    #[serde(default)]
+    pub monitoring: Vec<Param>,
+    #[serde(default)]
+    pub set: Vec<Param>,
+    #[serde(default)]
+    pub control: Vec<Param>,
+}
+
 /// One bridge rule: read a value from `read_from`, write it to `write_to`.
 ///
 /// Not implemented yet: rules are parsed, but no task runs them. The plan is a
@@ -284,6 +320,42 @@ pub struct TopicIndex {
 }
 
 impl TopicIndex {
+    /// Build the index for iot-middleware from a `MiddlewareMapping`.
+    ///
+    /// Every entry gets `device = None`: the middleware stores PLC and slave
+    /// values the same way, so it does not route by device.
+    pub fn build(base_topic: &str, mapping: &MiddlewareMapping) -> Self {
+        let mut entries = Vec::new();
+        for device in &mapping.devices {
+            let machine = format!("{}/{}", device.location, device.name);
+            for (cat, params) in [
+                (Category::Monitoring, &device.monitoring),
+                (Category::Set, &device.set),
+                (Category::Control, &device.control),
+            ] {
+                for p in params {
+                    entries.push(TopicEntry {
+                        machine: machine.clone(),
+                        device: None,
+                        category: cat,
+                        key: p.key.clone(),
+                        label: p.label.clone(),
+                        topic: format!("{}/{}/{}", base_topic, machine, p.topic),
+                        data_type: p.data_type,
+                        unit: p.unit.clone(),
+                        modbus: p.modbus.clone(),
+                    });
+                }
+            }
+        }
+        let by_topic = entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.topic.clone(), i))
+            .collect();
+        Self { entries, by_topic }
+    }
+
     /// Build the index for edge-client from a `DeviceMapping`.
     ///
     /// The primary PLC (first PLC in the array) gets `device = None`, used
@@ -354,6 +426,32 @@ impl TopicIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_mw_mapping() -> MiddlewareMapping {
+        let json = r#"{
+            "base_topic": "acme/site",
+            "poll_interval_ms": 1000,
+            "devices": [
+                {
+                    "location": "area1",
+                    "name": "machine_a",
+                    "monitoring": [
+                        { "key": "current_motor", "label": "Motor Current", "topic": "current/motor",
+                          "type": "float", "unit": "A" }
+                    ],
+                    "set": [
+                        { "key": "set_time", "label": "Time Setpoint", "topic": "set/time",
+                          "type": "integer", "unit": "s" }
+                    ],
+                    "control": [
+                        { "key": "control_lamp", "label": "Lamp On/Off", "topic": "control/lamp",
+                          "type": "boolean" }
+                    ]
+                }
+            ]
+        }"#;
+        serde_json::from_str(json).unwrap()
+    }
 
     // -------- DataType::parse --------
 
@@ -662,6 +760,143 @@ mod tests {
             }
             other => panic!("expected WriteMultipleRegisters, got {other:?}"),
         }
+    }
+
+    // -------- TopicIndex::build (middleware) --------
+
+    #[test]
+    fn build_cartesian_product() {
+        let m = sample_mw_mapping();
+        let idx = TopicIndex::build("acme/site", &m);
+        assert_eq!(idx.len(), 3);
+    }
+
+    #[test]
+    fn build_full_topic_format() {
+        let m = sample_mw_mapping();
+        let idx = TopicIndex::build("acme/site", &m);
+        let entry = idx
+            .lookup("acme/site/area1/machine_a/current/motor")
+            .expect("topic missing");
+        assert_eq!(entry.key, "current_motor");
+        assert_eq!(entry.category, Category::Monitoring);
+        assert_eq!(entry.data_type, DataType::Float);
+    }
+
+    #[test]
+    fn build_unknown_topic_returns_none() {
+        let m = sample_mw_mapping();
+        let idx = TopicIndex::build("acme/site", &m);
+        assert!(idx.lookup("acme/site/unknown/foo/bar").is_none());
+    }
+
+    #[test]
+    fn build_no_duplicate_topics() {
+        let m = sample_mw_mapping();
+        let idx = TopicIndex::build("acme/site", &m);
+        let mut topics: Vec<_> = idx.entries.iter().map(|e| e.topic.as_str()).collect();
+        topics.sort();
+        let before = topics.len();
+        topics.dedup();
+        assert_eq!(before, topics.len(), "duplicate topic in index");
+    }
+
+    #[test]
+    fn mw_mapping_rejects_unknown_type() {
+        let bad = r#"{
+            "base_topic": "acme/site",
+            "devices": [
+                { "location": "l", "name": "m",
+                  "monitoring": [{ "key": "x", "label": "X", "topic": "x", "type": "double" }] }
+            ]
+        }"#;
+        assert!(serde_json::from_str::<MiddlewareMapping>(bad).is_err());
+    }
+
+    #[test]
+    fn mw_mapping_multi_device_topic_derivation() {
+        let json = r#"{
+            "base_topic": "acme/site",
+            "devices": [
+                { "location": "area1", "name": "machine_a", "monitoring": [], "set": [], "control": [] },
+                { "location": "area2", "name": "chiller",
+                  "monitoring": [{
+                      "key": "temp_out",
+                      "label": "Chiller Outlet Temperature",
+                      "topic": "temp/out",
+                      "type": "float",
+                      "unit": "C"
+                  }]
+                }
+            ]
+        }"#;
+        let m: MiddlewareMapping = serde_json::from_str(json).unwrap();
+        let idx = TopicIndex::build("acme/site", &m);
+        let entry = idx
+            .lookup("acme/site/area2/chiller/temp/out")
+            .expect("topic missing");
+        assert_eq!(entry.key, "temp_out");
+        assert_eq!(entry.machine, "area2/chiller");
+        assert_eq!(entry.category, Category::Monitoring);
+        assert!(entry.device.is_none());
+    }
+
+    #[test]
+    fn mw_mapping_set_and_control_in_index() {
+        let json = r#"{
+            "base_topic": "acme/site",
+            "devices": [
+                { "location": "area2", "name": "chiller",
+                  "monitoring": [],
+                  "set": [{
+                      "key": "set_temp",
+                      "label": "Temperature Setpoint",
+                      "topic": "set/temp",
+                      "type": "float",
+                      "unit": "C"
+                  }],
+                  "control": [{
+                      "key": "control_on",
+                      "label": "Chiller On/Off",
+                      "topic": "control/on",
+                      "type": "boolean"
+                  }]
+                }
+            ]
+        }"#;
+        let m: MiddlewareMapping = serde_json::from_str(json).unwrap();
+        let idx = TopicIndex::build("acme/site", &m);
+        let set_entry = idx
+            .lookup("acme/site/area2/chiller/set/temp")
+            .expect("set topic missing");
+        assert_eq!(set_entry.category, Category::Set);
+        let ctrl_entry = idx
+            .lookup("acme/site/area2/chiller/control/on")
+            .expect("control topic missing");
+        assert_eq!(ctrl_entry.category, Category::Control);
+    }
+
+    #[test]
+    fn topic_entry_carries_modbus_through() {
+        let mapping_json = r#"{
+            "base_topic": "acme/site",
+            "devices": [{
+                "location": "area1",
+                "name": "machine_a",
+                "monitoring": [{
+                    "key": "current_motor", "label": "Motor Current", "topic": "current/motor",
+                    "type": "float", "unit": "A",
+                    "modbus": { "kind": "read_holding_registers", "address": 10 }
+                }]
+            }]
+        }"#;
+        let m: MiddlewareMapping = serde_json::from_str(mapping_json).unwrap();
+        let idx = TopicIndex::build("acme/site", &m);
+        let e = idx
+            .lookup("acme/site/area1/machine_a/current/motor")
+            .unwrap();
+        assert!(e.modbus.is_some());
+        assert_eq!(e.modbus.as_ref().unwrap().address(), 10);
     }
 }
 
