@@ -22,5 +22,5 @@ ENV AR_armv7_unknown_linux_musleabihf=arm-linux-musleabihf-ar
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+COPY crates ./crates
 RUN cargo build --release --target armv7-unknown-linux-musleabihf

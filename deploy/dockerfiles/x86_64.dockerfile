@@ -12,5 +12,5 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+COPY crates ./crates
 RUN cargo build --release --target x86_64-unknown-linux-gnu

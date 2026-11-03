@@ -1,0 +1,11 @@
+[package]
+name = "edge-shared"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "MQTT parameter mapping and Modbus register types shared by edge-client and iot-middleware."
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true

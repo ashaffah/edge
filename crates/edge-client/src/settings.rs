@@ -592,7 +592,10 @@ mod tests {
             "example-mapping-weigher-only.json",
             "example-mapping-plc-slave-weigher.json",
         ] {
-            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+            // Example mappings live at the workspace root, next to README.md.
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join(file);
             load_mapping(&path).unwrap_or_else(|e| panic!("{file}: {e:#}"));
         }
     }

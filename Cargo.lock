@@ -484,6 +484,7 @@ dependencies = [
  "async-trait",
  "clap",
  "dotenvy",
+ "edge-shared",
  "local-ip-address",
  "redis",
  "regex",
@@ -496,6 +497,15 @@ dependencies = [
  "tokio-serial",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "edge-shared"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

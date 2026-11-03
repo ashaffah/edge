@@ -18,5 +18,5 @@ ENV CC_x86_64_unknown_linux_musl=musl-gcc
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+COPY crates ./crates
 RUN cargo build --release --target x86_64-unknown-linux-musl

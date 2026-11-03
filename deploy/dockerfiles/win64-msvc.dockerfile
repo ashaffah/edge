@@ -22,5 +22,5 @@ ENV CXX_x86_64_pc_windows_msvc=clang-cl
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+COPY crates ./crates
 RUN cargo xwin build --release --target x86_64-pc-windows-msvc

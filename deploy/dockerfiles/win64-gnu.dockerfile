@@ -26,5 +26,5 @@ ENV RUSTFLAGS="-C link-arg=-ladvapi32"
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+COPY crates ./crates
 RUN cargo build --release --target x86_64-pc-windows-gnu

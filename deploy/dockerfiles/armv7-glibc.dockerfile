@@ -21,5 +21,5 @@ ENV CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+COPY crates ./crates
 RUN cargo build --release --target armv7-unknown-linux-gnueabihf
