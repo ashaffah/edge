@@ -278,19 +278,29 @@ fn parse_consistency(s: &str) -> Result<Consistency> {
     }
 }
 
-/// Maximum concurrent tasks for non-telemetry writes (setpoint, actuator,
-/// heartbeat, resource). When full, the write is dropped with a warning, the
-/// same policy as cache.rs: staying available matters more than completeness
-/// while Scylla is overloaded.
-const STORAGE_WRITE_CONCURRENCY: usize = 32;
+/// Maximum concurrent tasks for each group of non-telemetry writes. When a
+/// group is full, the write is dropped with a warning, the same policy as
+/// cache.rs: staying available matters more than completeness while Scylla is
+/// overloaded.
+///
+/// `*_current` (readback state) has its own group, so a burst of readback
+/// cannot crowd out heartbeat, PLC status, resource and history rows, which the
+/// outage and audit history depend on. edge-client publishes the readback of
+/// every `set`/`control` key once per poll cycle (default 1 s), and all edges
+/// share this group, so size it above the total number of such keys across
+/// edges. `*_current` is still written every cycle because command_dispatch
+/// only trusts a state younger than `STATE_MAX_AGE_MS` (5 s).
+const STATE_WRITE_CONCURRENCY: usize = 128;
+const EVENT_WRITE_CONCURRENCY: usize = 32;
 
 pub struct ScyllaStorage {
     session: Arc<Session>,
     prepared: Arc<Prepared>,
     telemetry_tx: mpsc::Sender<TelemetryRow>,
-    /// Bounds concurrent non-telemetry write tasks so they do not pile up
-    /// while Scylla is slow.
-    write_sem: Arc<Semaphore>,
+    /// Bound concurrent non-telemetry write tasks so they do not pile up while
+    /// Scylla is slow: `*_current` writes, and everything else.
+    state_sem: Arc<Semaphore>,
+    event_sem: Arc<Semaphore>,
 }
 
 impl ScyllaStorage {
@@ -346,20 +356,21 @@ impl ScyllaStorage {
             session,
             prepared,
             telemetry_tx: tx,
-            write_sem: Arc::new(Semaphore::new(STORAGE_WRITE_CONCURRENCY)),
+            state_sem: Arc::new(Semaphore::new(STATE_WRITE_CONCURRENCY)),
+            event_sem: Arc::new(Semaphore::new(EVENT_WRITE_CONCURRENCY)),
         })
     }
 
-    /// Fire-and-forget write bounded by the semaphore. When it is full (Scylla
-    /// slow), the write is dropped with a warning instead of blocking the caller.
+    /// Fire-and-forget write bounded by `sem`. When it is full (Scylla slow), the
+    /// write is dropped with a warning instead of blocking the caller.
     fn spawn_write(
-        &self,
+        sem: &Arc<Semaphore>,
+        capacity: usize,
         label: &'static str,
         fut: impl std::future::Future<Output = Result<()>> + Send + 'static,
     ) {
-        let sem = Arc::clone(&self.write_sem);
-        let Ok(permit) = sem.try_acquire_owned() else {
-            warn!("storage write slots full ({STORAGE_WRITE_CONCURRENCY}), dropping {label}");
+        let Ok(permit) = Arc::clone(sem).try_acquire_owned() else {
+            warn!("storage write slots full ({capacity}), dropping {label}");
             return;
         };
         tokio::spawn(async move {
@@ -368,6 +379,24 @@ impl ScyllaStorage {
                 error!("storage {label} write failed: {e:#}");
             }
         });
+    }
+
+    /// Event write (history, heartbeat, PLC status, resource).
+    fn spawn_event(
+        &self,
+        label: &'static str,
+        fut: impl std::future::Future<Output = Result<()>> + Send + 'static,
+    ) {
+        Self::spawn_write(&self.event_sem, EVENT_WRITE_CONCURRENCY, label, fut);
+    }
+
+    /// `*_current` write (readback state).
+    fn spawn_state(
+        &self,
+        label: &'static str,
+        fut: impl std::future::Future<Output = Result<()>> + Send + 'static,
+    ) {
+        Self::spawn_write(&self.state_sem, STATE_WRITE_CONCURRENCY, label, fut);
     }
 }
 
@@ -390,7 +419,7 @@ impl StorageRepo for ScyllaStorage {
     fn record_setpoint_history(&self, row: SetpointRow) {
         let session = self.session.clone();
         let prepared = self.prepared.clone();
-        self.spawn_write("setpoint_history", async move {
+        self.spawn_event("setpoint_history", async move {
             insert_setpoint(&session, &prepared.insert_setpoint_history, &row).await
         });
     }
@@ -398,7 +427,7 @@ impl StorageRepo for ScyllaStorage {
     fn record_setpoint_current(&self, row: SetpointRow) {
         let session = self.session.clone();
         let prepared = self.prepared.clone();
-        self.spawn_write("setpoint_current", async move {
+        self.spawn_state("setpoint_current", async move {
             insert_setpoint(&session, &prepared.insert_setpoint_current, &row).await
         });
     }
@@ -406,7 +435,7 @@ impl StorageRepo for ScyllaStorage {
     fn record_actuator_history(&self, row: ActuatorRow) {
         let session = self.session.clone();
         let prepared = self.prepared.clone();
-        self.spawn_write("actuator_history", async move {
+        self.spawn_event("actuator_history", async move {
             insert_actuator(&session, &prepared.insert_actuator_history, &row).await
         });
     }
@@ -414,7 +443,7 @@ impl StorageRepo for ScyllaStorage {
     fn record_actuator_current(&self, row: ActuatorRow) {
         let session = self.session.clone();
         let prepared = self.prepared.clone();
-        self.spawn_write("actuator_current", async move {
+        self.spawn_state("actuator_current", async move {
             insert_actuator(&session, &prepared.insert_actuator_current, &row).await
         });
     }
@@ -422,7 +451,7 @@ impl StorageRepo for ScyllaStorage {
     fn record_heartbeat(&self, row: HeartbeatRow) {
         let session = self.session.clone();
         let prepared = self.prepared.clone();
-        self.spawn_write("heartbeat", async move {
+        self.spawn_event("heartbeat", async move {
             insert_heartbeat(&session, &prepared, &row).await
         });
     }
@@ -430,7 +459,7 @@ impl StorageRepo for ScyllaStorage {
     fn record_plc_status(&self, row: PlcStatusRow) {
         let session = self.session.clone();
         let prepared = self.prepared.clone();
-        self.spawn_write("plc_status", async move {
+        self.spawn_event("plc_status", async move {
             insert_plc_status(&session, &prepared, &row).await
         });
     }
@@ -438,7 +467,7 @@ impl StorageRepo for ScyllaStorage {
     fn record_resource(&self, row: ResourceRow) {
         let session = self.session.clone();
         let prepared = self.prepared.clone();
-        self.spawn_write("resource", async move {
+        self.spawn_event("resource", async move {
             insert_resource(&session, &prepared, &row).await
         });
     }
