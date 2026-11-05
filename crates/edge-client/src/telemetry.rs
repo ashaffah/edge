@@ -636,6 +636,7 @@ mod tests {
 
     fn holding_entry(key: &str, data_type: DataType, address: u16) -> TopicEntry {
         TopicEntry {
+            json_field: None,
             machine: "area1/machine_a".into(),
             device: None,
             category: Category::Monitoring,
@@ -655,6 +656,7 @@ mod tests {
 
     fn coil_entry(key: &str, address: u16) -> TopicEntry {
         TopicEntry {
+            json_field: None,
             machine: "area1/machine_a".into(),
             device: None,
             category: Category::Monitoring,
@@ -697,6 +699,7 @@ mod tests {
         // DINT seconds counter, big_little: regs[36]=0x0A9A (low), regs[37]=0x0000
         // (high) = 2714. Decoded as f32 this would publish "0".
         let entry = TopicEntry {
+            json_field: None,
             modbus: Some(ModbusBinding::ReadHoldingRegisters {
                 address: 36,
                 byte_order: ByteOrder::BigLittle,
@@ -716,6 +719,7 @@ mod tests {
         // Param with scale: 0.1, raw 750.0 publishes "75.00"
         // 750.0f32 = 0x443B8000, big_big regs [0x443B, 0x8000]
         let entry = TopicEntry {
+            json_field: None,
             machine: "area3/machine_c".into(),
             device: None,
             category: Category::Monitoring,
@@ -743,6 +747,7 @@ mod tests {
         // 75.5f32 = 0x42970000, big_big regs [0x4297, 0x0000]
         let entry_no_scale = holding_entry("temp_tank", DataType::Float, 0);
         let entry_scale_one = TopicEntry {
+            json_field: None,
             modbus: Some(ModbusBinding::ReadHoldingRegisters {
                 address: 0,
                 byte_order: ByteOrder::BigBig,
@@ -831,6 +836,7 @@ mod tests {
     #[test]
     fn from_settings_filter_excludes_control_category() {
         let write_coil_entry = |key: &str, address: u16| TopicEntry {
+            json_field: None,
             machine: "area1/machine_a".into(),
             device: None,
             category: Category::Control,
