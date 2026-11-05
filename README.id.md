@@ -26,6 +26,7 @@ Agent tetap bisa jalan tanpa middleware.
   - [Jenis device & koneksi](#jenis-device--koneksi)
   - [Parameter & kategori](#parameter--kategori)
   - [Readback](#readback)
+  - [Payload JSON (`json_field`)](#payload-json-json_field)
   - [Binding Modbus](#binding-modbus)
   - [Byte order](#byte-order)
   - [Parser weigher & command](#parser-weigher--command)
@@ -231,6 +232,31 @@ Pembacaan dikelompokkan per alamat jadi request di bawah batas Modbus (125
 register / 2000 coil), terpisah dari bulk read telemetry. Device yang readback-nya
 gagal di-skip 30 detik. Aktifkan `readback` hanya kalau PLC menyimpan nilai yang
 ditulis di alamat itu.
+
+### Payload JSON (`json_field`)
+
+iot-middleware mengharapkan payload berupa nilai polos (`4064`). Sebagian device
+yang publish langsung ke broker, misalnya HMI Haiwell, membungkusnya dalam objek
+JSON (`{"label":4064}`). Tambahkan `"json_field"` untuk membaca nilai di key
+tersebut:
+
+```jsonc
+{
+  "key": "counter_label",
+  "label": "Counter Label",
+  "topic": "label",
+  "type": "integer",
+  "unit": "pcs",
+  "json_field": "label", // payload {"label":4064} disimpan sebagai 4064
+}
+```
+
+Payload polos tetap diterima untuk parameter itu, jadi device bisa ganti format
+tanpa mengubah mapping. Payload JSON tanpa key tersebut, atau berisi array, objek
+atau `null` di key itu, dicatat sebagai error parse lalu dilewati. Nilainya tetap
+melewati parse `type` biasa, jadi `{"label":4064.5}` tetap bukan `integer`. Tanpa
+`json_field`, seluruh payload dianggap nilai, jadi objek JSON dilewati.
+edge-client mengabaikan field ini.
 
 ### Binding Modbus
 

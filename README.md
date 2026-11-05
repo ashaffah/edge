@@ -26,6 +26,7 @@ agent works without it.
   - [Device types & connections](#device-types--connections)
   - [Parameters & categories](#parameters--categories)
   - [Readback](#readback)
+  - [JSON payloads (`json_field`)](#json-payloads-json_field)
   - [Modbus bindings](#modbus-bindings)
   - [Byte order](#byte-order)
   - [Weigher parser & commands](#weigher-parser--commands)
@@ -230,6 +231,30 @@ Reads are grouped by address into requests under the Modbus limits (125
 registers / 2000 coils), separate from the telemetry bulk read. A device whose
 readback fails is skipped for 30 s. Enable `readback` only if the PLC keeps the
 written value at that address.
+
+### JSON payloads (`json_field`)
+
+iot-middleware expects a plain value as payload (`4064`). Some devices that
+publish straight to the broker, such as Haiwell HMIs, wrap it in a JSON object
+(`{"label":4064}`). Add `"json_field"` to read the value under that key:
+
+```jsonc
+{
+  "key": "counter_label",
+  "label": "Counter Label",
+  "topic": "label",
+  "type": "integer",
+  "unit": "pcs",
+  "json_field": "label", // payload {"label":4064} is stored as 4064
+}
+```
+
+A plain payload is still accepted for that parameter, so the device can switch
+formats without a mapping change. A JSON payload without the key, or with an
+array, object or `null` under it, is logged as a parse error and skipped. The
+value then goes through the usual `type` parsing, so `{"label":4064.5}` is still
+not an `integer`. Without `json_field` the whole payload is the value, so a JSON
+object is skipped. edge-client ignores the field.
 
 ### Modbus bindings
 

@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use super::modbus::ByteOrder;
@@ -96,6 +97,12 @@ pub struct Param {
     /// Default `false`. Enable only if the PLC keeps the value at that address.
     #[serde(default)]
     pub readback: bool,
+    /// Only read by iot-middleware: the payload is a JSON object and the value is
+    /// the one under this key, e.g. `{"label":4064}` with `"json_field": "label"`
+    /// (the format Haiwell HMIs publish). A plain value is still accepted, so the
+    /// device can switch formats without a mapping change. edge-client ignores it.
+    #[serde(default)]
+    pub json_field: Option<String>,
 }
 
 /// Topic where edge-client publishes the readback value of a `set[]` /
@@ -309,6 +316,56 @@ pub struct TopicEntry {
     /// Modbus binding if present. `None` means the parameter is not polled by
     /// edge-client.
     pub modbus: Option<ModbusBinding>,
+    /// See [`Param::json_field`].
+    pub json_field: Option<String>,
+}
+
+impl TopicEntry {
+    /// Parse an MQTT payload for this entry: take the value out of a JSON object
+    /// when `json_field` is set (see [`payload_value`]), then parse it as
+    /// `data_type`.
+    pub fn parse_payload(&self, raw: &str) -> Result<TypedValue> {
+        self.parse_payload_as(self.data_type, raw)
+    }
+
+    /// Same as [`parse_payload`](Self::parse_payload) with another type, for a
+    /// readback that is always boolean whatever the entry's `type`.
+    pub fn parse_payload_as(&self, data_type: DataType, raw: &str) -> Result<TypedValue> {
+        data_type.parse(&payload_value(raw, self.json_field.as_deref())?)
+    }
+}
+
+/// The value to parse from a raw MQTT payload.
+///
+/// Without `json_field` the payload is the value. With it, a payload that is a JSON
+/// object gives the value under that key; any other payload is still taken as the
+/// value itself, so `4064` and `{"label":4064}` both work for `json_field: "label"`.
+///
+/// ```
+/// use edge_shared::payload_value;
+///
+/// assert_eq!(payload_value(r#"{"label":4064}"#, Some("label")).unwrap(), "4064");
+/// assert_eq!(payload_value("4064", Some("label")).unwrap(), "4064");
+/// assert_eq!(payload_value(r#"{"label":4064}"#, None).unwrap(), r#"{"label":4064}"#);
+/// assert!(payload_value(r#"{"capping":3900}"#, Some("label")).is_err());
+/// ```
+pub fn payload_value<'a>(raw: &'a str, json_field: Option<&str>) -> Result<Cow<'a, str>> {
+    let Some(field) = json_field else {
+        return Ok(Cow::Borrowed(raw));
+    };
+    let trimmed = raw.trim();
+    if !trimmed.starts_with('{') {
+        return Ok(Cow::Borrowed(raw));
+    }
+    let object: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(trimmed).context("invalid JSON object payload")?;
+    match object.get(field) {
+        Some(serde_json::Value::Number(n)) => Ok(Cow::Owned(n.to_string())),
+        Some(serde_json::Value::String(s)) => Ok(Cow::Owned(s.clone())),
+        Some(serde_json::Value::Bool(b)) => Ok(Cow::Owned(b.to_string())),
+        Some(other) => bail!("JSON field {field:?} is not a number, string or boolean: {other}"),
+        None => bail!("JSON field {field:?} not in payload"),
+    }
 }
 
 /// O(1) lookup from a full MQTT topic to an entry. Built once at startup from
@@ -344,6 +401,7 @@ impl TopicIndex {
                         data_type: p.data_type,
                         unit: p.unit.clone(),
                         modbus: p.modbus.clone(),
+                        json_field: p.json_field.clone(),
                     });
                 }
             }
@@ -394,6 +452,7 @@ impl TopicIndex {
                         data_type: p.data_type,
                         unit: p.unit.clone(),
                         modbus: p.modbus.clone(),
+                        json_field: p.json_field.clone(),
                     });
                 }
             }
@@ -451,6 +510,86 @@ mod tests {
             ]
         }"#;
         serde_json::from_str(json).unwrap()
+    }
+
+    // -------- payload_value / json_field --------
+
+    #[test]
+    fn payload_value_without_json_field_is_the_raw_payload() {
+        let raw = r#"{"label":4064}"#;
+        assert!(matches!(payload_value(raw, None).unwrap(), Cow::Borrowed(v) if v == raw));
+    }
+
+    #[test]
+    fn payload_value_reads_the_field_of_a_json_object() {
+        assert_eq!(
+            payload_value(r#"{"label":4064}"#, Some("label")).unwrap(),
+            "4064"
+        );
+        assert_eq!(
+            payload_value(r#" {"t": 12.5} "#, Some("t")).unwrap(),
+            "12.5"
+        );
+        assert_eq!(payload_value(r#"{"on":true}"#, Some("on")).unwrap(), "true");
+        assert_eq!(payload_value(r#"{"u":"kg"}"#, Some("u")).unwrap(), "kg");
+        // Other keys in the object do not matter.
+        assert_eq!(
+            payload_value(r#"{"ts":1,"label":7}"#, Some("label")).unwrap(),
+            "7"
+        );
+    }
+
+    #[test]
+    fn payload_value_accepts_a_plain_value_with_json_field() {
+        assert!(matches!(
+            payload_value("4064", Some("label")).unwrap(),
+            Cow::Borrowed("4064")
+        ));
+    }
+
+    #[test]
+    fn payload_value_rejects_missing_field_bad_json_and_nested_values() {
+        assert!(payload_value(r#"{"capping":3900}"#, Some("label")).is_err());
+        assert!(payload_value(r#"{"label":"#, Some("label")).is_err());
+        assert!(payload_value(r#"{"label":[1,2]}"#, Some("label")).is_err());
+        assert!(payload_value(r#"{"label":null}"#, Some("label")).is_err());
+    }
+
+    #[test]
+    fn parse_payload_uses_json_field_then_data_type() {
+        let mapping: MiddlewareMapping = serde_json::from_str(
+            r#"{
+                "base_topic": "acme/site",
+                "devices": [{
+                    "location": "area1",
+                    "name": "counter",
+                    "monitoring": [
+                        { "key": "counter_label", "label": "Counter Label", "topic": "label",
+                          "type": "integer", "unit": "pcs", "json_field": "label" },
+                        { "key": "counter_filling", "label": "Counter Filling",
+                          "topic": "filling", "type": "integer", "unit": "pcs" }
+                    ]
+                }]
+            }"#,
+        )
+        .unwrap();
+        let index = TopicIndex::build("acme/site", &mapping);
+        let label = index.lookup("acme/site/area1/counter/label").unwrap();
+        assert_eq!(label.json_field.as_deref(), Some("label"));
+        assert!(matches!(
+            label.parse_payload(r#"{"label":4064}"#).unwrap(),
+            TypedValue::Integer(4064)
+        ));
+        assert!(matches!(
+            label.parse_payload("4064").unwrap(),
+            TypedValue::Integer(4064)
+        ));
+        // A decimal is still not an integer.
+        assert!(label.parse_payload(r#"{"label":4064.5}"#).is_err());
+
+        let filling = index.lookup("acme/site/area1/counter/filling").unwrap();
+        assert_eq!(filling.json_field, None);
+        assert!(filling.parse_payload(r#"{"filling":3908}"#).is_err());
     }
 
     // -------- DataType::parse --------
