@@ -43,7 +43,7 @@ pub fn handle(
         return;
     }
 
-    let Some(value) = parse(entry.data_type, topic, payload) else {
+    let Some(value) = parse(entry, entry.data_type, topic, payload) else {
         return;
     };
     let Some(v) = numeric_value(&value) else {
@@ -72,7 +72,7 @@ fn handle_state(
 ) {
     match entry.category {
         Category::Set => {
-            let Some(value) = parse(entry.data_type, topic, payload) else {
+            let Some(value) = parse(entry, entry.data_type, topic, payload) else {
                 return;
             };
             let Some(v) = numeric_value(&value) else {
@@ -91,7 +91,8 @@ fn handle_state(
         }
         Category::Control => {
             // Control readback is always boolean, whatever the entry's `type` in the mapping.
-            let Some(TypedValue::Boolean(state)) = parse(DataType::Boolean, topic, payload) else {
+            let Some(TypedValue::Boolean(state)) = parse(entry, DataType::Boolean, topic, payload)
+            else {
                 return;
             };
             let row = ActuatorRow {
@@ -107,14 +108,22 @@ fn handle_state(
     }
 }
 
-fn parse(data_type: DataType, topic: &str, payload: &str) -> Option<TypedValue> {
-    match data_type.parse(payload) {
+/// Parse `payload` for `entry` as `data_type`, reading the value out of a JSON
+/// object first when the entry has `json_field` (see `edge_shared::payload_value`).
+fn parse(
+    entry: &TopicEntry,
+    data_type: DataType,
+    topic: &str,
+    payload: &str,
+) -> Option<TypedValue> {
+    match entry.parse_payload_as(data_type, payload) {
         Ok(v) => Some(v),
         Err(err) => {
             error!(
                 %topic,
                 payload = %payload,
                 expected = ?data_type,
+                json_field = ?entry.json_field,
                 "failed to parse payload: {err:#}"
             );
             None

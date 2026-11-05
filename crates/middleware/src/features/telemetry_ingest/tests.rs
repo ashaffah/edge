@@ -124,7 +124,9 @@ fn fixture() -> (TelemetryIngestService, Arc<MockStorage>, Arc<MockCache>) {
                 { "key": "current_motor", "label": "Motor Current", "topic": "current/motor",
                   "type": "float", "unit": "A" },
                 { "key": "run_time", "label": "Run Time", "topic": "run/time",
-                  "type": "integer", "unit": "s" }
+                  "type": "integer", "unit": "s" },
+                { "key": "counter_label", "label": "Counter Label", "topic": "counter/label",
+                  "type": "integer", "unit": "pcs", "json_field": "label" }
             ],
             "set": [
                 { "key": "set_temp_main_pot", "label": "Set Temp", "topic": "set/temp/main",
@@ -271,4 +273,56 @@ fn control_state_with_non_boolean_skipped() {
     service.handle_at("acme/site/area1/machine_a/state/control/lamp", "2", 0);
     assert!(storage.actuator_current.lock().unwrap().is_empty());
     assert_eq!(cache.actuator.lock().unwrap().len(), 0);
+}
+
+#[test]
+fn json_field_reads_the_value_out_of_a_json_payload() {
+    let (service, storage, cache) = fixture();
+    service.handle_at(
+        "acme/site/area1/machine_a/counter/label",
+        r#"{"label":4064}"#,
+        5,
+    );
+
+    let t = storage.telemetry.lock().unwrap();
+    assert_eq!(t.len(), 1);
+    assert_eq!(t[0].key, "counter_label");
+    assert!((t[0].value - 4064.0).abs() < 1e-9);
+    assert_eq!(t[0].unit.as_deref(), Some("pcs"));
+    assert_eq!(cache.telemetry.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn json_field_still_accepts_a_plain_payload() {
+    let (service, storage, _cache) = fixture();
+    service.handle_at("acme/site/area1/machine_a/counter/label", "4064", 5);
+
+    let t = storage.telemetry.lock().unwrap();
+    assert_eq!(t.len(), 1);
+    assert!((t[0].value - 4064.0).abs() < 1e-9);
+}
+
+#[test]
+fn json_payload_without_json_field_is_skipped() {
+    let (service, storage, cache) = fixture();
+    service.handle_at(
+        "acme/site/area1/machine_a/run/time",
+        r#"{"run_time":120}"#,
+        5,
+    );
+
+    assert!(storage.telemetry.lock().unwrap().is_empty());
+    assert!(cache.telemetry.lock().unwrap().is_empty());
+}
+
+#[test]
+fn json_payload_without_the_field_is_skipped() {
+    let (service, storage, _cache) = fixture();
+    service.handle_at(
+        "acme/site/area1/machine_a/counter/label",
+        r#"{"capping":3900}"#,
+        5,
+    );
+
+    assert!(storage.telemetry.lock().unwrap().is_empty());
 }
